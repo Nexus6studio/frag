@@ -9,6 +9,7 @@ import {
   Scene,
   WebGLRenderer,
 } from "three";
+import { mountShell } from "./shell";
 
 const renderer = new WebGLRenderer({
   antialias: true,
@@ -18,6 +19,7 @@ const renderer = new WebGLRenderer({
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
+const shell = mountShell(renderer.domElement);
 
 const scene = new Scene();
 scene.background = new Color(0x111118);
@@ -57,6 +59,7 @@ function resize(): void {
 window.addEventListener("resize", resize);
 
 function frame(time: number): void {
+  shell.onFrame(time);
   cube.rotation.x = time * 0.0004;
   cube.rotation.y = time * 0.001;
   renderer.render(scene, camera);
