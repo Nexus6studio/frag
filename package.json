@@ -1,0 +1,27 @@
+{
+  "name": "frag",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Frag, a client-side browser FPS by Nexus6 Studio.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --strictPort",
+    "check": "node scripts/check-provenance.mjs",
+    "test": "node --test scripts/check-provenance.test.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.8"
+  }
+}
