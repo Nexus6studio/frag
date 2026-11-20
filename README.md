@@ -28,6 +28,8 @@ npm run preview
 
 `npm run build` typechecks with `tsc` and writes the static site to `dist/`. `npm run preview` serves that build.
 
+A fresh load shows a content warning before play. The warning names blood and gibs, fictional violence, and flashing lights. Continue acknowledges it for that page load only. It is not stored, and the next load shows it again. Continue then reveals a click-to-play overlay titled Frag. Click it, or press Enter, to lock the pointer and hide the overlay. Esc releases the pointer and pauses. Click the pause overlay to resume. Resuming does not show the warning again. Backquote or F1 toggles a small FPS readout, which is off until then. The scene behind the overlays is the placeholder three.js cube.
+
 CI job `build` runs `npm ci`, `npm run build`, the license and provenance gate, the gate's self-test, and a headless Playwright smoke test.
 
 ## Deploys
