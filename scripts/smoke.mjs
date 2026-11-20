@@ -1,0 +1,165 @@
+import { spawn } from "node:child_process";
+import net from "node:net";
+import path from "node:path";
+import process from "node:process";
+import { chromium } from "playwright";
+
+const root = path.resolve(import.meta.dirname, "..");
+const host = "127.0.0.1";
+const port = Number(process.env.FRAG_PREVIEW_PORT ?? 4173);
+const origin = `http://${host}:${port}`;
+
+function waitForPort(timeoutMs) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      const socket = net.connect({ port, host });
+      const finish = (ok) => {
+        socket.removeAllListeners();
+        socket.destroy();
+        if (ok) {
+          resolve();
+          return;
+        }
+        if (Date.now() - start > timeoutMs) {
+          reject(new Error(`vite preview did not listen on ${origin}`));
+          return;
+        }
+        setTimeout(attempt, 200);
+      };
+      socket.once("connect", () => finish(true));
+      socket.once("error", () => finish(false));
+    };
+    attempt();
+  });
+}
+
+const preview = spawn(
+  process.execPath,
+  [
+    path.join(root, "node_modules/vite/bin/vite.js"),
+    "preview",
+    "--host",
+    host,
+    "--port",
+    String(port),
+    "--strictPort",
+  ],
+  { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
+);
+
+let previewLog = "";
+preview.stdout.on("data", (chunk) => {
+  previewLog += chunk;
+});
+preview.stderr.on("data", (chunk) => {
+  previewLog += chunk;
+});
+
+function stopPreview() {
+  if (preview.exitCode == null && !preview.killed) preview.kill("SIGTERM");
+}
+
+async function previewExited() {
+  if (preview.exitCode != null || preview.signalCode != null) return;
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      preview.kill("SIGKILL");
+      resolve();
+    }, 3000);
+    preview.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+const errors = [];
+
+try {
+  await waitForPort(20_000);
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--enable-webgl",
+      "--ignore-gpu-blocklist",
+    ],
+  });
+  try {
+    const page = await browser.newPage();
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(`console: ${message.text()}`);
+    });
+    page.on("pageerror", (error) => {
+      errors.push(`pageerror: ${error.message}`);
+    });
+    page.on("request", (request) => {
+      const url = request.url();
+      if (url.startsWith(`${origin}/`) || url === origin || url.startsWith("data:")) return;
+      errors.push(`unexpected network request: ${url}`);
+    });
+
+    await page.goto(`${origin}/`, { waitUntil: "load", timeout: 15_000 });
+    await page.waitForSelector("canvas", { timeout: 5_000 });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
+
+    const sample = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      if (!(canvas instanceof HTMLCanvasElement)) return { error: "canvas missing" };
+      const probe = document.createElement("canvas");
+      probe.width = canvas.width;
+      probe.height = canvas.height;
+      const context = probe.getContext("2d", { willReadFrequently: true });
+      if (!context) return { error: "2d context missing" };
+      context.drawImage(canvas, 0, 0);
+      const pixels = context.getImageData(0, 0, probe.width, probe.height).data;
+      let colored = 0;
+      for (let index = 0; index < pixels.length; index += 32) {
+        const red = pixels[index] ?? 0;
+        const green = pixels[index + 1] ?? 0;
+        const blue = pixels[index + 2] ?? 0;
+        const alpha = pixels[index + 3] ?? 0;
+        if (alpha < 250) continue;
+        if (Math.abs(red - 0x11) + Math.abs(green - 0x11) + Math.abs(blue - 0x18) > 48) {
+          colored += 1;
+        }
+      }
+      return { width: canvas.width, height: canvas.height, colored };
+    });
+
+    if (sample.error) errors.push(sample.error);
+    else if (!sample.width || !sample.height) errors.push("canvas has no pixels");
+    else if (sample.colored < 8) {
+      errors.push(
+        `canvas does not show a rendered object (${sample.colored} non-background samples)`,
+      );
+    }
+
+    if (errors.length > 0) {
+      console.error(errors.join("\n"));
+      if (previewLog.trim()) console.error(previewLog);
+      process.exitCode = 1;
+    } else {
+      console.log(
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, no console errors`,
+      );
+    }
+  } finally {
+    await browser.close();
+  }
+} catch (error) {
+  console.error(error instanceof Error ? error.stack ?? error.message : error);
+  if (errors.length > 0) console.error(errors.join("\n"));
+  if (previewLog.trim()) console.error(previewLog);
+  process.exitCode = 1;
+} finally {
+  stopPreview();
+  await previewExited();
+}
