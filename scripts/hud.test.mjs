@@ -155,5 +155,5 @@ test("debug hook attaches only when called", () => {
 test("debug hook in main is gated on import.meta.env.DEV", () => {
   const source = fs.readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
   const gated = source.replace(/\s+/g, " ");
-  assert.match(gated, /if \(import\.meta\.env\.DEV\) \{ exposePlayerDebug\(window, player\); \}/);
+  assert.match(gated, /if \(import\.meta\.env\.DEV\) \{[^}]*exposePlayerDebug\(window, player\);/);
 });

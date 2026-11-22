@@ -28,7 +28,7 @@ npm run preview
 
 `npm run build` typechecks with `tsc` and writes the static site to `dist/`. `npm run preview` serves that build.
 
-A fresh load shows a content warning before play. The warning names blood and gibs, fictional violence, and flashing lights. Continue acknowledges it for that page load only. It is not stored, and the next load shows it again. Continue then reveals a click-to-play overlay titled Frag. Click it, or press Enter, to lock the pointer and hide the overlay. Esc releases the pointer and pauses. Click the pause overlay to resume. Resuming does not show the warning again. Backquote or F1 toggles a small FPS and position readout, which is off until then. The scene behind the overlays is the placeholder three.js cube. Looking, the control table, and the field of view are below.
+A fresh load shows a content warning before play. The warning names blood and gibs, fictional violence, and flashing lights. Continue acknowledges it for that page load only. It is not stored, and the next load shows it again. Continue then reveals a click-to-play overlay titled Frag. Click it, or press Enter, to lock the pointer and hide the overlay. Esc releases the pointer and pauses. Click the pause overlay to resume. Resuming does not show the warning again. Backquote or F1 toggles a small FPS readout, which is off until then. The scene behind the overlays is a flat test floor: a ground plane, a 45° ramp, a 0.30 m step, a 1 m ledge, and a pillar. Nothing there is a loaded asset. Looking, movement, the control table, and the field of view are below.
 
 ## Controls
 
@@ -36,9 +36,9 @@ Looking and buttons are read from one input state each frame. `down` is held. `p
 
 | Input | State | Action |
 | --- | --- | --- |
-| W A S D | `forward` `left` `back` `right` | Move intent. No movement physics yet. |
+| W A S D | `forward` `left` `back` `right` | Walk and strafe on the test floor. |
 | Mouse | `lookX` `lookY` | Yaw and pitch while the pointer is locked. Pitch clamps to ±89°. |
-| Space | `jump` | Jump intent. |
+| Space | `jump` | Jump. |
 | Left mouse | `fire` | Full-auto fire intent. `down.fire` stays set for the whole hold. `pressed.fire` is only the down edge. The gun is a later ticket. |
 | R | `reload` | Reload intent. |
 | Esc | `pause` | Pause and release the pointer. Click the pause overlay to resume. |
@@ -47,7 +47,13 @@ Looking and buttons are read from one input state each frame. `down` is held. `p
 
 There is no gamepad or touch input.
 
-Default look sensitivity is 0.12° per pointer-lock pixel (`movementX` / `movementY`). The Pointer Lock specification reports those deltas in CSS pixels. Frag does not scale them by `devicePixelRatio`, so one CSS pixel of mouse travel is 0.12° at every display scale. Pointer acceleration applied by the operating system is left as the browser reports it. `[` and `]` step that sensitivity by 0.02° while playing. The debug readout shows FPS, camera position, yaw, pitch, and the current sensitivity. Nothing is written to `localStorage`.
+Default look sensitivity is 0.12° per pointer-lock pixel (`movementX` / `movementY`). The Pointer Lock specification reports those deltas in CSS pixels. Frag does not scale them by `devicePixelRatio`, so one CSS pixel of mouse travel is 0.12° at every display scale. Pointer acceleration applied by the operating system is left as the browser reports it. `[` and `]` step that sensitivity by 0.02° while playing. The debug readout shows FPS, camera position, yaw, pitch, sensitivity, planar speed, and whether the body is grounded. Nothing is written to `localStorage`.
+
+## Movement
+
+The test floor is 1 unit = 1 meter. The body is a capsule 0.35 m in radius and 1.60 m tall, with the eye 1.45 m off the ground. Simulation steps at a fixed 120 Hz inside the frame, so the feel does not follow the display rate. The step takes the current state, the wish from the input, and the timestep, and returns the next state.
+
+On the ground, forward, back, and strafe share an 8 m/s wish. Acceleration toward that wish is 10 m/s². With the keys released, drag at 6/s brings a full run to rest in about 0.3 s. In the air the wish is still 8 m/s but acceleration is 2 m/s², so a strafe can correct a jump without flying. Gravity is 20 m/s². A jump sets vertical speed to 6.8 m/s (apex about 1.15 m) and only works while grounded. Slopes up to 45° and steps up to 0.30 m are walkable. Steeper faces slide or block. Ground drag stays off for 80 ms after a landing, so a jump in that window keeps the speed you landed with. Horizontal speed never exceeds 9.2 m/s.
 
 ## Field of view
 

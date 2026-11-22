@@ -1,17 +1,17 @@
-import {
-  AmbientLight,
-  BoxGeometry,
-  Color,
-  DirectionalLight,
-  Mesh,
-  MeshStandardMaterial,
-  PerspectiveCamera,
-  Scene,
-  WebGLRenderer,
-} from "three";
+import { AmbientLight, Color, DirectionalLight, PerspectiveCamera, Scene, WebGLRenderer } from "three";
+import { addTestFloor } from "./floor";
 import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
 import { createLook } from "./look";
+import {
+  EYE_HEIGHT,
+  SPAWN,
+  createMover,
+  createTestHull,
+  exposeMoveDebug,
+  intentFromInput,
+  planarSpeedOf,
+} from "./move";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
 
@@ -27,17 +27,18 @@ const shell = mountShell(renderer.domElement);
 const input = createInput(renderer.domElement);
 const player = createPlayerState();
 mountHud(player);
-if (import.meta.env.DEV) {
-  exposePlayerDebug(window, player);
-}
+
+const hull = createTestHull();
+const mover = createMover(hull);
 
 const scene = new Scene();
 scene.background = new Color(0x111118);
+addTestFloor(scene, hull);
 
-const camera = new PerspectiveCamera(50, 1, 0.1, 100);
-camera.position.set(1.8, 1.2, 2.6);
+const camera = new PerspectiveCamera(50, 1, 0.1, 150);
+camera.position.set(SPAWN.x, SPAWN.y + EYE_HEIGHT, SPAWN.z);
 camera.rotation.order = "YXZ";
-camera.lookAt(0, 0, 0);
+camera.lookAt(SPAWN.x, SPAWN.y + EYE_HEIGHT, SPAWN.z - 1);
 const look = createLook(camera);
 // The smoke test reads the live camera fov from the canvas.
 Object.defineProperty(renderer.domElement, "fragView", {
@@ -46,20 +47,15 @@ Object.defineProperty(renderer.domElement, "fragView", {
   value: look.view,
 });
 
-const cube = new Mesh(
-  new BoxGeometry(1, 1, 1),
-  new MeshStandardMaterial({
-    color: 0x3dff9a,
-    roughness: 0.35,
-    metalness: 0.05,
-  }),
-);
-scene.add(cube);
+if (import.meta.env.DEV) {
+  exposePlayerDebug(window, player);
+  exposeMoveDebug(window, () => mover.state);
+}
 
 const keyLight = new DirectionalLight(0xffffff, 2.4);
-keyLight.position.set(3, 5, 2);
+keyLight.position.set(3, 8, 2);
 scene.add(keyLight);
-scene.add(new AmbientLight(0xffffff, 0.45));
+scene.add(new AmbientLight(0xffffff, 0.55));
 
 function resize(): void {
   // 105° horizontal. PerspectiveCamera.fov is vertical; look.resize derives it.
@@ -70,7 +66,11 @@ function resize(): void {
 window.addEventListener("resize", resize);
 resize();
 
+let lastTime = 0;
+
 function frame(time: number): void {
+  const frameDt = lastTime === 0 ? 0 : Math.min(0.1, Math.max(0, (time - lastTime) / 1000));
+  lastTime = time;
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
   const controls = input.sample(captured);
@@ -78,8 +78,11 @@ function frame(time: number): void {
     look.apply(controls.lookX, controls.lookY);
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
     if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
+    mover.advance(frameDt, intentFromInput(controls, look.yaw));
   }
-  // Move, jump, fire, and reload stay on `controls` for later tickets.
+  const body = mover.state;
+  camera.position.set(body.position.x, body.position.y + EYE_HEIGHT, body.position.z);
+  // Fire and reload stay on `controls` for a later ticket.
   shell.onFrame(time, {
     x: camera.position.x,
     y: camera.position.y,
@@ -87,9 +90,9 @@ function frame(time: number): void {
     yaw: look.yaw,
     pitch: look.pitch,
     sensitivity: look.sensitivity,
+    planarSpeed: planarSpeedOf(body.velocity),
+    grounded: body.grounded,
   });
-  cube.rotation.x = time * 0.0004;
-  cube.rotation.y = time * 0.001;
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
