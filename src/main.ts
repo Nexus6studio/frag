@@ -10,6 +10,8 @@ import {
   WebGLRenderer,
 } from "three";
 import { mountHud } from "./hud/hud";
+import { createInput } from "./input";
+import { createLook } from "./look";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
 
@@ -22,6 +24,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 const shell = mountShell(renderer.domElement);
+const input = createInput(renderer.domElement);
 const player = createPlayerState();
 mountHud(player);
 if (import.meta.env.DEV) {
@@ -31,14 +34,17 @@ if (import.meta.env.DEV) {
 const scene = new Scene();
 scene.background = new Color(0x111118);
 
-const camera = new PerspectiveCamera(
-  50,
-  window.innerWidth / Math.max(window.innerHeight, 1),
-  0.1,
-  100,
-);
+const camera = new PerspectiveCamera(50, 1, 0.1, 100);
 camera.position.set(1.8, 1.2, 2.6);
+camera.rotation.order = "YXZ";
 camera.lookAt(0, 0, 0);
+const look = createLook(camera);
+// The smoke test reads the live camera fov from the canvas.
+Object.defineProperty(renderer.domElement, "fragView", {
+  configurable: true,
+  enumerable: false,
+  value: look.view,
+});
 
 const cube = new Mesh(
   new BoxGeometry(1, 1, 1),
@@ -56,17 +62,32 @@ scene.add(keyLight);
 scene.add(new AmbientLight(0xffffff, 0.45));
 
 function resize(): void {
-  const width = window.innerWidth;
-  const height = Math.max(window.innerHeight, 1);
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  renderer.setSize(width, height);
+  // 105° horizontal. PerspectiveCamera.fov is vertical; look.resize derives it.
+  look.resize(window.innerWidth, window.innerHeight);
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
 window.addEventListener("resize", resize);
+resize();
 
 function frame(time: number): void {
-  shell.onFrame(time);
+  const captured =
+    shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
+  const controls = input.sample(captured);
+  if (captured) {
+    look.apply(controls.lookX, controls.lookY);
+    if (controls.pressed.sensUp) look.nudgeSensitivity(1);
+    if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
+  }
+  // Move, jump, fire, and reload stay on `controls` for later tickets.
+  shell.onFrame(time, {
+    x: camera.position.x,
+    y: camera.position.y,
+    z: camera.position.z,
+    yaw: look.yaw,
+    pitch: look.pitch,
+    sensitivity: look.sensitivity,
+  });
   cube.rotation.x = time * 0.0004;
   cube.rotation.y = time * 0.001;
   renderer.render(scene, camera);

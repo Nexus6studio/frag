@@ -91,6 +91,46 @@ async function visibleText(page, selector) {
   return page.locator(selector).innerText();
 }
 
+function horizontalFov(verticalDeg, aspect) {
+  const vertical = (verticalDeg * Math.PI) / 180;
+  return (2 * Math.atan(Math.tan(vertical / 2) * aspect) * 180) / Math.PI;
+}
+
+async function readView(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement) || canvas.fragView == null) {
+      return { error: "fragView missing" };
+    }
+    const { verticalFov, aspect } = canvas.fragView;
+    return {
+      verticalFov,
+      aspect,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+    };
+  });
+}
+
+function assertHorizontalFov(view, errors, label) {
+  if (!view || view.error) {
+    errors.push(`${label}: ${view?.error ?? "missing view"}`);
+    return;
+  }
+  if (!Number.isFinite(view.verticalFov) || !Number.isFinite(view.aspect)) {
+    errors.push(`${label}: non-finite fov ${view.verticalFov} aspect ${view.aspect}`);
+    return;
+  }
+  const expectedAspect = view.innerWidth / Math.max(view.innerHeight, 1);
+  if (Math.abs(view.aspect - expectedAspect) > 1e-4) {
+    errors.push(`${label}: aspect ${view.aspect} != viewport ${expectedAspect}`);
+  }
+  const horizontal = horizontalFov(view.verticalFov, view.aspect);
+  if (Math.abs(horizontal - 105) > 0.02) {
+    errors.push(`${label}: horizontal fov ${horizontal.toFixed(4)}°, expected 105°`);
+  }
+}
+
 async function hudMode(page) {
   return page.locator("#hud").evaluate((el) => el.getAttribute("data-mode"));
 }
@@ -246,6 +286,20 @@ async function assertShellFlow(page, errors) {
   if (await page.locator("#fps-readout").evaluate((el) => el.hidden)) {
     errors.push("backquote did not show the fps readout");
   }
+  try {
+    await page.waitForFunction(
+      () => {
+        const readout = document.querySelector("#fps-readout");
+        const text = readout?.textContent ?? "";
+        return readout?.hidden === false && text.includes("fps") && text.includes("pos") && text.includes("sens");
+      },
+      undefined,
+      { timeout: 2_000 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`fps readout did not show position and sensitivity: ${message}`);
+  }
   await page.keyboard.press("F1");
   if (await page.locator("#fps-readout").evaluate((el) => !el.hidden)) {
     errors.push("f1 did not hide the fps readout");
@@ -316,7 +370,7 @@ try {
     ],
   });
   try {
-    const page = await browser.newPage();
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     page.on("console", (message) => {
       if (message.type() === "error") errors.push(`console: ${message.text()}`);
     });
@@ -370,7 +424,27 @@ try {
       );
     }
 
+    assertHorizontalFov(await readView(page), errors, "initial viewport");
+
     await assertShellFlow(page, errors);
+
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
+    assertHorizontalFov(await readView(page), errors, "after resize 900x700");
+
+    await page.setViewportSize({ width: 700, height: 900 });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
+    assertHorizontalFov(await readView(page), errors, "after resize 700x900");
 
     if (errors.length > 0) {
       console.error(errors.join("\n"));
@@ -378,7 +452,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> pause -> resume -> reload, no console errors`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> pause -> resume -> reload, no console errors`,
       );
     }
   } finally {

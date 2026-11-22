@@ -28,7 +28,36 @@ npm run preview
 
 `npm run build` typechecks with `tsc` and writes the static site to `dist/`. `npm run preview` serves that build.
 
-A fresh load shows a content warning before play. The warning names blood and gibs, fictional violence, and flashing lights. Continue acknowledges it for that page load only. It is not stored, and the next load shows it again. Continue then reveals a click-to-play overlay titled Frag. Click it, or press Enter, to lock the pointer and hide the overlay. Esc releases the pointer and pauses. Click the pause overlay to resume. Resuming does not show the warning again. Backquote or F1 toggles a small FPS readout, which is off until then. The scene behind the overlays is the placeholder three.js cube.
+A fresh load shows a content warning before play. The warning names blood and gibs, fictional violence, and flashing lights. Continue acknowledges it for that page load only. It is not stored, and the next load shows it again. Continue then reveals a click-to-play overlay titled Frag. Click it, or press Enter, to lock the pointer and hide the overlay. Esc releases the pointer and pauses. Click the pause overlay to resume. Resuming does not show the warning again. Backquote or F1 toggles a small FPS and position readout, which is off until then. The scene behind the overlays is the placeholder three.js cube. Looking, the control table, and the field of view are below.
+
+## Controls
+
+Looking and buttons are read from one input state each frame. `down` is held. `pressed` and `released` are the edges since the previous frame. The state is empty while the pointer is unlocked or the game is paused, so look and buttons do nothing then. Losing the pointer lock clears edges. It does not emit a release for a key that was held. A key still held when play resumes is `down` again without a new `pressed`.
+
+| Input | State | Action |
+| --- | --- | --- |
+| W A S D | `forward` `left` `back` `right` | Move intent. No movement physics yet. |
+| Mouse | `lookX` `lookY` | Yaw and pitch while the pointer is locked. Pitch clamps to ±89°. |
+| Space | `jump` | Jump intent. |
+| Left mouse | `fire` | Full-auto fire intent. `down.fire` stays set for the whole hold. `pressed.fire` is only the down edge. The gun is a later ticket. |
+| R | `reload` | Reload intent. |
+| Esc | `pause` | Pause and release the pointer. Click the pause overlay to resume. |
+| Backquote or F1 | `debug` | Toggle the FPS and position readout. The shell toggle still works while paused. |
+| `[` `]` | `sensDown` `sensUp` | Temporary mouse sensitivity. Not saved. |
+
+There is no gamepad or touch input.
+
+Default look sensitivity is 0.12° per pointer-lock pixel (`movementX` / `movementY`). The Pointer Lock specification reports those deltas in CSS pixels. Frag does not scale them by `devicePixelRatio`, so one CSS pixel of mouse travel is 0.12° at every display scale. Pointer acceleration applied by the operating system is left as the browser reports it. `[` and `]` step that sensitivity by 0.02° while playing. The debug readout shows FPS, camera position, yaw, pitch, and the current sensitivity. Nothing is written to `localStorage`.
+
+## Field of view
+
+The horizontal field of view is 105°. three.js `PerspectiveCamera.fov` is the vertical field of view, so Frag derives the vertical angle from 105° and the viewport aspect ratio (`width / height`) and writes that into `camera.fov` on load and on resize:
+
+```
+vertical = 2 * atan(tan(horizontal / 2) / aspect)
+```
+
+A square viewport is 105° vertical. A wider viewport keeps 105° horizontal and uses a smaller vertical angle.
 
 CI job `build` runs `npm ci`, `npm run build`, the license and provenance gate, the gate's self-test, and a headless Playwright smoke test.
 
