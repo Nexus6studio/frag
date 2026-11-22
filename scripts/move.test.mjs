@@ -12,6 +12,7 @@ import {
   GROUND_WISH_SPEED,
   JUMP_SPEED,
   LANDING_GRACE,
+  MAX_FRAME_SECONDS,
   PLANAR_CAP,
   SIM_DT,
   STEP_HEIGHT,
@@ -118,7 +119,23 @@ test("no input stops an 8 m/s run in about 0.3 s", () => {
     if (stoppedAt === null && planarSpeedOf(state.velocity) === 0) stoppedAt = i * SIM_DT;
   }
   assert.ok(stoppedAt !== null);
-  assert.ok(stoppedAt >= 0.25 && stoppedAt <= 0.4, `stopped at ${stoppedAt}`);
+  assert.ok(stoppedAt >= 0.27 && stoppedAt <= 0.33, `stopped at ${stoppedAt}`);
+
+  const mover = createMover(flat, {
+    position: { x: 0, y: 0, z: 0 },
+    velocity: { x: 0, y: 0, z: -8 },
+    grounded: true,
+    timeOnGround: 1,
+  });
+  const frame = 1 / 20;
+  let seenAt = null;
+  for (let i = 1; i <= 20; i += 1) {
+    const stepped = mover.advance(frame, still);
+    if (seenAt === null && planarSpeedOf(stepped.velocity) === 0) seenAt = i * frame;
+  }
+  assert.ok(seenAt !== null);
+  assert.ok(Math.abs(seenAt - 0.3) <= 0.05, `20 fps stop ${seenAt}`);
+  console.log(`measured stop s ${stoppedAt.toFixed(3)} at 20 fps ${seenAt.toFixed(3)}`);
 });
 
 test("jump apex on flat ground is about 1.15 m and there is no coyote time", () => {
@@ -171,7 +188,7 @@ test("a 0.30 m step is walkable and a 1 m ledge is not", () => {
 
 test("the 45 degree ramp can be walked and the pillar blocks", () => {
   const climbed = run(
-    createMoveState({ x: -9, y: 0, z: 0 }),
+    createMoveState({ x: 0, y: 0, z: 1 }),
     { forward: 1, strafe: 0, jump: false, yawDeg: 0 },
     3,
     hull,
@@ -292,6 +309,170 @@ test("a jump inside the landing grace keeps planar speed and honors the cap", ()
   console.log(
     `measured bhop speed m/s ${keptSpeed.toFixed(3)} capped ${cappedSpeed.toFixed(3)} after grace ${slowed.toFixed(3)}`,
   );
+});
+
+function jumpThroughLoop(fps) {
+  const frame = 1 / fps;
+  const mover = createMover(flat, createMoveState({ x: 0, y: 0, z: 0 }));
+  let peak = 0;
+  let leftGround = false;
+  const limit = Math.ceil(fps * 2);
+  for (let i = 0; i < limit; i += 1) {
+    const intent = i === 0 ? { ...still, jump: true } : still;
+    const stepped = mover.advance(frame, intent);
+    if (stepped.position.y > peak) peak = stepped.position.y;
+    if (!stepped.grounded) leftGround = true;
+    else if (leftGround) return { peak, airtime: (i + 1) * frame, leftGround };
+  }
+  return { peak, airtime: limit * frame, leftGround };
+}
+
+test("jump apex and airtime match the spec through the game loop", () => {
+  for (const fps of [120, 60, 30, 20]) {
+    const result = jumpThroughLoop(fps);
+    assert.equal(result.leftGround, true, `${fps} fps never left the ground`);
+    assert.ok(
+      Math.abs(result.peak - 1.15) <= 0.05,
+      `${fps} fps feet apex ${result.peak}`,
+    );
+    assert.ok(
+      Math.abs(result.airtime - 0.68) <= 0.03,
+      `${fps} fps airtime ${result.airtime}`,
+    );
+    console.log(
+      `measured jump at ${fps} fps apex ${result.peak.toFixed(3)} m airtime ${result.airtime.toFixed(3)} s`,
+    );
+  }
+});
+
+test("the sim stays real time down to 20 fps and only clamps long stalls", () => {
+  const intent = { forward: 1, strafe: 0, jump: false, yawDeg: 0 };
+  const fine = createMover(flat, createMoveState({ x: 0, y: 0, z: 0 }));
+  const coarse = createMover(flat, createMoveState({ x: 0, y: 0, z: 0 }));
+  for (let i = 0; i < 120; i += 1) fine.advance(1 / 120, intent);
+  for (let i = 0; i < 20; i += 1) coarse.advance(1 / 20, intent);
+  assert.ok(
+    Math.abs(fine.state.position.z - coarse.state.position.z) < 0.05,
+    `20 fps z ${coarse.state.position.z} vs 120 fps ${fine.state.position.z}`,
+  );
+
+  const stall = createMover(flat, createMoveState({ x: 0, y: 0, z: 0 }));
+  stall.advance(0.2, intent);
+  let expected = createMoveState({ x: 0, y: 0, z: 0 });
+  const steps = Math.round(0.2 / SIM_DT);
+  for (let i = 0; i < steps; i += 1) expected = stepMovement(expected, intent, SIM_DT, flat);
+  assert.ok(
+    Math.abs(stall.state.position.z - expected.position.z) < 0.05,
+    `200 ms frame z ${stall.state.position.z} vs ${expected.position.z}`,
+  );
+
+  const clamped = createMover(flat, createMoveState({ x: 0, y: 0, z: 0 }));
+  clamped.advance(0.4, intent);
+  let cap = createMoveState({ x: 0, y: 0, z: 0 });
+  const capSteps = Math.round(MAX_FRAME_SECONDS / SIM_DT);
+  for (let i = 0; i < capSteps; i += 1) cap = stepMovement(cap, intent, SIM_DT, flat);
+  let unclamped = createMoveState({ x: 0, y: 0, z: 0 });
+  for (let i = 0; i < Math.round(0.4 / SIM_DT); i += 1) {
+    unclamped = stepMovement(unclamped, intent, SIM_DT, flat);
+  }
+  assert.ok(Math.abs(clamped.state.position.z - cap.position.z) < 0.08, "400 ms stall was not clamped");
+  assert.ok(
+    Math.abs(clamped.state.position.z - unclamped.position.z) > 0.2,
+    "400 ms stall simulated the whole gap",
+  );
+});
+
+test("a full-speed walk climbs the 45 degree ramp and a steeper face blocks", () => {
+  let state = {
+    position: { x: 0, y: 0, z: 1 },
+    velocity: { x: 0, y: 0, z: -8 },
+    grounded: true,
+    timeOnGround: 1,
+  };
+  const intent = { forward: 1, strafe: 0, jump: false, yawDeg: 0 };
+  let minOnSlope = 99;
+  let maxGrounded = 0;
+  for (let i = 0; i < Math.round(1.2 / SIM_DT); i += 1) {
+    state = stepMovement(state, intent, SIM_DT, hull);
+    if (state.grounded && state.position.y > 0.2 && state.position.y < 1.4) {
+      minOnSlope = Math.min(minOnSlope, planarSpeedOf(state.velocity));
+    }
+    if (state.grounded) maxGrounded = Math.max(maxGrounded, state.position.y);
+  }
+  assert.ok(maxGrounded > 1.2, `ramp height ${maxGrounded}`);
+  assert.ok(minOnSlope >= 7.5, `ramp speed ${minOnSlope}`);
+
+  const steep = {
+    boxes: [],
+    ramps: [{ minX: -2, maxX: 2, minZ: -6, maxZ: -2, yAtMaxZ: 0, rise: 6 }],
+  };
+  let blocked = {
+    position: { x: 0, y: 0, z: 0 },
+    velocity: { x: 0, y: 0, z: -8 },
+    grounded: true,
+    timeOnGround: 1,
+  };
+  for (let i = 0; i < Math.round(1 / SIM_DT); i += 1) {
+    blocked = stepMovement(blocked, intent, SIM_DT, steep);
+  }
+  assert.ok(blocked.position.y < 0.2, `steep climb ${blocked.position.y}`);
+  assert.ok(blocked.position.z > -2.2, `walked through the steep face, z ${blocked.position.z}`);
+
+  const borderline = Math.tan((46 * Math.PI) / 180) * 4;
+  const over = {
+    boxes: [],
+    ramps: [{ minX: -2, maxX: 2, minZ: -6, maxZ: -2, yAtMaxZ: 0, rise: borderline }],
+  };
+  let fortySix = createMoveState({ x: 0, y: 0, z: 0 });
+  for (let i = 0; i < Math.round(1 / SIM_DT); i += 1) {
+    fortySix = stepMovement(fortySix, intent, SIM_DT, over);
+  }
+  assert.ok(fortySix.position.y < 0.2, `46 degree climb ${fortySix.position.y}`);
+});
+
+test("a 30 degree glance keeps the tangential speed and a head-on hit stops", () => {
+  const wall = {
+    boxes: [{ min: { x: -30, y: 0, z: -8 }, max: { x: 30, y: 3, z: -6 } }],
+    ramps: [],
+  };
+  const angle = (30 * Math.PI) / 180;
+  const speed = 8;
+  const yaw = (Math.atan2(-Math.cos(angle), Math.sin(angle)) * 180) / Math.PI;
+  let state = {
+    position: { x: 0, y: 0, z: -6 + 0.35 + 0.4 },
+    velocity: { x: speed * Math.cos(angle), y: 0, z: -speed * Math.sin(angle) },
+    grounded: true,
+    timeOnGround: 1,
+  };
+  const wish = { forward: 1, strafe: 0, jump: false, yawDeg: yaw };
+  let kept = null;
+  let recovered = 0;
+  for (let i = 0; i < Math.round(0.6 / SIM_DT); i += 1) {
+    state = stepMovement(state, wish, SIM_DT, wall);
+    const into = state.velocity.z;
+    if (kept === null && state.position.z <= -6 + 0.35 + 0.02 && Math.abs(into) < 0.35) {
+      kept = planarSpeedOf(state.velocity);
+    }
+    recovered = planarSpeedOf(state.velocity);
+  }
+  assert.ok(kept !== null, "never slid along the wall");
+  assert.ok(Math.abs(kept - 8 * Math.cos(angle)) <= 0.3, `kept ${kept}`);
+  assert.ok(recovered >= 7.6, `did not accelerate back toward 8, speed ${recovered}`);
+  assert.ok(recovered <= 9.2 + 1e-6, `slide exceeded the cap, ${recovered}`);
+  assert.ok(state.position.z > -6 + 0.3, `passed into the wall, z ${state.position.z}`);
+
+  let head = {
+    position: { x: 0, y: 0, z: -6 + 0.35 + 0.3 },
+    velocity: { x: 0, y: 0, z: -8 },
+    grounded: true,
+    timeOnGround: 1,
+  };
+  for (let i = 0; i < Math.round(0.25 / SIM_DT); i += 1) {
+    head = stepMovement(head, { forward: 1, strafe: 0, jump: false, yawDeg: 0 }, SIM_DT, wall);
+  }
+  assert.ok(planarSpeedOf(head.velocity) < 0.3, `head-on speed ${planarSpeedOf(head.velocity)}`);
+  assert.ok(head.position.z > -6 + 0.3, `head-on passed the wall, z ${head.position.z}`);
+  console.log(`measured glance kept ${kept.toFixed(3)} m/s then ${recovered.toFixed(3)} m/s`);
 });
 
 test("fixed steps do not depend on how a frame is sliced", () => {

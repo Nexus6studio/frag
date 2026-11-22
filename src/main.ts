@@ -69,7 +69,8 @@ resize();
 let lastTime = 0;
 
 function frame(time: number): void {
-  const frameDt = lastTime === 0 ? 0 : Math.min(0.1, Math.max(0, (time - lastTime) / 1000));
+  // Stall clamping lives in the mover, so the game and the headless loop share one budget.
+  const frameDt = lastTime === 0 ? 0 : Math.max(0, (time - lastTime) / 1000);
   lastTime = time;
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;

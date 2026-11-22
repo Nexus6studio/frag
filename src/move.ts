@@ -7,8 +7,8 @@
 //
 // Ground movement steers the horizontal velocity toward a wish of fixed length.
 // Forward, back, strafe, and diagonals share that length. With no wish, drag
-// bleeds speed off until a small rest threshold, which is what makes a full
-// stop take about a third of a second. For a short grace after landing, that
+// and a small constant brake bleed speed off until a rest threshold, so a full
+// stop takes about a third of a second. For a short grace after landing, that
 // drag is skipped, so a jump in the grace keeps the speed you landed with.
 // Horizontal speed is always limited, including in the air.
 //
@@ -37,9 +37,19 @@ export const LANDING_GRACE = 0.08;
 
 export const SIM_HZ = 120;
 export const SIM_DT = 1 / SIM_HZ;
+/**
+ * Frames longer than this are dropped instead of simulated. A tab switch can
+ * stall for seconds; a 20 fps frame (50 ms) must still run in real time.
+ */
+export const MAX_FRAME_SECONDS = 0.25;
 
-/** Below this, drag snaps to rest. ln(8 / 1.3) / 6 is about 0.30 s from a full run. */
-const REST_SPEED = 1.3;
+/** Below this, braking snaps to rest. High enough to finish a stop, low enough that a wall clip does not stick. */
+const REST_SPEED = 0.45;
+/**
+ * Constant deceleration added only when no direction is held. Friction stays 6/s;
+ * this term brings an 8 m/s coast to rest at about 0.30 s.
+ */
+const STOP_ACCEL = 6.6;
 const WALK_Y = Math.cos((WALK_SLOPE_DEG * Math.PI) / 180);
 const UP = { x: 0, y: 1, z: 0 };
 
@@ -103,7 +113,11 @@ export function flatHull(): Hull {
   return { boxes: [], ramps: [] };
 }
 
-/** Ground, a 0.30 m step, a 1 m ledge, a 45° ramp, and a pillar. */
+/**
+ * Ground, a 0.30 m step, a 1 m ledge, a pillar, and a 45° ramp.
+ * The ramp sits in front of the spawn: 1.5 m tall over 1.5 m of run, so the
+ * near face is the slope rather than a tall wall.
+ */
 export function createTestHull(): Hull {
   return {
     boxes: [
@@ -112,7 +126,7 @@ export function createTestHull(): Hull {
       { min: { x: -4.2, y: 0, z: -9 }, max: { x: -2.6, y: 3, z: -6.6 } },
     ],
     ramps: [
-      { minX: -12, maxX: -6, minZ: -8, maxZ: -2, yAtMaxZ: 0, rise: 6 },
+      { minX: -3, maxX: 3, minZ: -2.5, maxZ: -1, yAtMaxZ: 0, rise: 1.5 },
     ],
   };
 }
@@ -160,21 +174,28 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
   let vz = state.velocity.z;
   const startedGrounded = state.grounded;
   const grace = startedGrounded && state.timeOnGround <= LANDING_GRACE;
+  // A wish aimed into a wall we are already touching is steered along that wall
+  // before friction, so the slide is not treated as uncommanded speed.
+  const canStep = startedGrounded && !intent.jump;
+  const steered =
+    startedGrounded && wish
+      ? projectPlanar(wish, wallNormals(state.position, state.position.y, hull, canStep, CONTACT_SKIN))
+      : wish;
 
   if (startedGrounded) {
     if (!grace) {
-      if (wish) {
-        const bled = bleedUncommanded(vx, vz, wish, GROUND_WISH_SPEED, dt);
+      if (steered) {
+        const bled = bleedUncommanded(vx, vz, steered, GROUND_WISH_SPEED, dt);
         vx = bled.x;
         vz = bled.z;
       } else {
-        const stopped = brakePlanar(vx, vz, dt);
+        const stopped = brakePlanar(vx, vz, dt, STOP_ACCEL);
         vx = stopped.x;
         vz = stopped.z;
       }
     }
-    if (wish) {
-      const sped = accelerate(vx, vz, wish, GROUND_WISH_SPEED, GROUND_ACCEL, dt);
+    if (steered) {
+      const sped = accelerate(vx, vz, steered, GROUND_WISH_SPEED, GROUND_ACCEL, dt);
       vx = sped.x;
       vz = sped.z;
     }
@@ -191,7 +212,6 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
     const capped = capPlanar(vx, vz, PLANAR_CAP);
     vx = capped.x;
     vz = capped.z;
-    vy -= GRAVITY * dt;
   }
 
   const moved = collideMove(
@@ -201,6 +221,7 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
     hull,
     vy > 0,
     startedGrounded,
+    !startedGrounded || intent.jump,
   );
 
   let timeOnGround = 0;
@@ -227,10 +248,15 @@ export function createMover(hull: Hull, initial?: MoveState): {
       return cloneState(state);
     },
     advance(frameSeconds: number, intent: MoveIntent): MoveState {
-      const clamped = Number.isFinite(frameSeconds) ? Math.min(Math.max(frameSeconds, 0), 0.1) : 0;
+      const clamped = Number.isFinite(frameSeconds)
+        ? Math.min(Math.max(frameSeconds, 0), MAX_FRAME_SECONDS)
+        : 0;
       accumulator += clamped;
+      // Enough steps to consume a full clamped frame. The sub-step remainder stays
+      // in the accumulator so a 20 fps delta is not rounded down into slow motion.
+      const maxSteps = Math.ceil(MAX_FRAME_SECONDS / SIM_DT) + 2;
       let steps = 0;
-      while (accumulator >= SIM_DT && steps < 16) {
+      while (accumulator >= SIM_DT && steps < maxSteps) {
         state = stepMovement(state, intent, SIM_DT, hull);
         accumulator -= SIM_DT;
         steps += 1;
@@ -278,10 +304,21 @@ function cloneState(state: MoveState): MoveState {
   };
 }
 
-function brakePlanar(x: number, z: number, dt: number): { x: number; z: number } {
+function brakePlanar(
+  x: number,
+  z: number,
+  dt: number,
+  stopAccel = 0,
+): { x: number; z: number } {
   const speed = Math.hypot(x, z);
   if (speed <= REST_SPEED) return { x: 0, z: 0 };
-  const next = speed * Math.exp(-GROUND_FRICTION * dt);
+  // dv/dt = -friction * v - stopAccel. stopAccel is zero while a wish is held,
+  // so steering drag stays the exponential term alone.
+  const next =
+    stopAccel > 0
+      ? (speed + stopAccel / GROUND_FRICTION) * Math.exp(-GROUND_FRICTION * dt) -
+        stopAccel / GROUND_FRICTION
+      : speed * Math.exp(-GROUND_FRICTION * dt);
   if (next <= REST_SPEED) return { x: 0, z: 0 };
   const scale = next / speed;
   return { x: x * scale, z: z * scale };
@@ -374,81 +411,156 @@ interface WallPush {
   ny: number;
 }
 
-function circleRectPush(x: number, z: number, box: BoxSolid): WallPush | null {
-  const { min, max } = box;
-  const inside = x >= min.x && x <= max.x && z >= min.z && z <= max.z;
-  if (inside) {
-    const faces = [
-      { depth: x - min.x + CAPSULE_RADIUS, nx: -1, nz: 0 },
-      { depth: max.x - x + CAPSULE_RADIUS, nx: 1, nz: 0 },
-      { depth: z - min.z + CAPSULE_RADIUS, nx: 0, nz: -1 },
-      { depth: max.z - z + CAPSULE_RADIUS, nx: 0, nz: 1 },
-    ];
-    let best = faces[0]!;
-    for (const face of faces) {
-      if (face.depth < best.depth) best = face;
+/** How far outside a surface still counts as contact, so a slide keeps its wish. */
+const CONTACT_SKIN = 0.02;
+
+function projectPlanar(wish: { x: number; z: number }, normals: Vec3[]): { x: number; z: number } | null {
+  let x = wish.x;
+  let z = wish.z;
+  for (const normal of normals) {
+    if (normal.y >= WALK_Y) continue;
+    const horizontal = Math.hypot(normal.x, normal.z);
+    if (horizontal < 1e-8) continue;
+    const nx = normal.x / horizontal;
+    const nz = normal.z / horizontal;
+    const into = x * nx + z * nz;
+    if (into < 0) {
+      x -= nx * into;
+      z -= nz * into;
     }
-    return { ...best, ny: 0 };
   }
-  const cx = clamp(x, min.x, max.x);
-  const cz = clamp(z, min.z, max.z);
-  const dx = x - cx;
-  const dz = z - cz;
-  const dist = Math.hypot(dx, dz);
-  if (dist >= CAPSULE_RADIUS || dist < 1e-10) return null;
-  return { depth: CAPSULE_RADIUS - dist, nx: dx / dist, nz: dz / dist, ny: 0 };
+  const length = Math.hypot(x, z);
+  if (length < 1e-6) return null;
+  return { x: x / length, z: z / length };
 }
 
-function steepRampPush(x: number, y: number, z: number, ramp: RampSolid): WallPush | null {
+/** Point vs the box expanded by the capsule radius. Normals stay on the faces, so a corner cannot cancel the slide. */
+function boxPush(x: number, z: number, box: BoxSolid, padding = 0): WallPush | null {
+  const reach = CAPSULE_RADIUS + padding;
+  const minX = box.min.x - reach;
+  const maxX = box.max.x + reach;
+  const minZ = box.min.z - reach;
+  const maxZ = box.max.z + reach;
+  if (x < minX || x > maxX || z < minZ || z > maxZ) return null;
+  const faces = [
+    { depth: x - minX, nx: -1, nz: 0 },
+    { depth: maxX - x, nx: 1, nz: 0 },
+    { depth: z - minZ, nx: 0, nz: -1 },
+    { depth: maxZ - z, nx: 0, nz: 1 },
+  ];
+  let best = faces[0]!;
+  for (const face of faces) {
+    if (face.depth < best.depth) best = face;
+  }
+  return { ...best, ny: 0 };
+}
+
+function steepRampPush(
+  x: number,
+  y: number,
+  z: number,
+  ramp: RampSolid,
+  padding = 0,
+): WallPush | null {
   const plane = rampPlane(ramp);
   if (isWalkableNormal(plane.normal.y)) return null;
-  if (x < ramp.minX - CAPSULE_RADIUS || x > ramp.maxX + CAPSULE_RADIUS) return null;
-  if (z < ramp.minZ - CAPSULE_RADIUS || z > ramp.maxZ + CAPSULE_RADIUS) return null;
+  const reach = CAPSULE_RADIUS + padding;
+  if (x < ramp.minX - reach || x > ramp.maxX + reach) return null;
+  if (z < ramp.minZ - reach || z > ramp.maxZ + reach) return null;
   const nearestX = clamp(x, ramp.minX, ramp.maxX);
   const nearestZ = clamp(z, ramp.minZ, ramp.maxZ);
-  if ((x - nearestX) ** 2 + (z - nearestZ) ** 2 > CAPSULE_RADIUS ** 2) return null;
+  if ((x - nearestX) ** 2 + (z - nearestZ) ** 2 > reach * reach) return null;
   const dist =
     plane.normal.x * x + plane.normal.y * (y + CAPSULE_RADIUS) + plane.normal.z * z - plane.d;
-  if (dist >= CAPSULE_RADIUS) return null;
+  if (dist >= reach) return null;
   return {
-    depth: CAPSULE_RADIUS - dist,
+    depth: reach - dist,
     nx: plane.normal.x,
     ny: plane.normal.y,
     nz: plane.normal.z,
   };
 }
 
-function slideWalls(
-  pos: Vec3,
+function considerWall(
+  hit: WallPush | null,
+  push: WallPush | null,
+): WallPush | null {
+  if (!push || push.depth <= 1e-5) return hit;
+  if (!hit || push.depth > hit.depth) return push;
+  return hit;
+}
+
+function deepestWall(
+  x: number,
+  y: number,
+  z: number,
   feetY: number,
   hull: Hull,
   canStep: boolean,
-): { position: Vec3; wall: Vec3 | null } {
+  padding: number,
+): WallPush | null {
+  let hit: WallPush | null = null;
+  for (const box of hull.boxes) {
+    if (feetY >= box.max.y - 0.02) continue;
+    if (canStep && isStep(box, feetY)) continue;
+    if (feetY + CAPSULE_HEIGHT <= box.min.y) continue;
+    hit = considerWall(hit, boxPush(x, z, box, padding));
+  }
+  for (const ramp of hull.ramps) {
+    hit = considerWall(hit, steepRampPush(x, y, z, ramp, padding));
+  }
+  return hit;
+}
+
+function wallNormals(pos: Vec3, feetY: number, hull: Hull, canStep: boolean, padding: number): Vec3[] {
+  const normals: Vec3[] = [];
+  for (const box of hull.boxes) {
+    if (feetY >= box.max.y - 0.02) continue;
+    if (canStep && isStep(box, feetY)) continue;
+    if (feetY + CAPSULE_HEIGHT <= box.min.y) continue;
+    const push = boxPush(pos.x, pos.z, box, padding);
+    if (push && push.depth > 1e-5) normals.push({ x: push.nx, y: 0, z: push.nz });
+  }
+  for (const ramp of hull.ramps) {
+    const push = steepRampPush(pos.x, feetY, pos.z, ramp, padding);
+    if (push && push.depth > 1e-5) normals.push({ x: push.nx, y: push.ny, z: push.nz });
+  }
+  return normals;
+}
+
+function clipAgainst(velocity: Vec3, normal: Vec3): Vec3 {
+  if (normal.y >= WALK_Y) return velocity;
+  const into = velocity.x * normal.x + velocity.y * normal.y + velocity.z * normal.z;
+  if (into >= 0) return velocity;
+  return {
+    x: velocity.x - normal.x * into,
+    y: velocity.y - normal.y * into,
+    z: velocity.z - normal.z * into,
+  };
+}
+
+function slideWalls(
+  pos: Vec3,
+  velocity: Vec3,
+  feetY: number,
+  hull: Hull,
+  canStep: boolean,
+): { position: Vec3; velocity: Vec3 } {
   let x = pos.x;
   let y = pos.y;
   let z = pos.z;
-  let wall: Vec3 | null = null;
+  let next = { x: velocity.x, y: velocity.y, z: velocity.z };
   for (let iter = 0; iter < 4; iter += 1) {
-    let hit: WallPush | null = null;
-    for (const box of hull.boxes) {
-      if (feetY >= box.max.y - 0.02) continue;
-      if (canStep && isStep(box, feetY)) continue;
-      if (feetY + CAPSULE_HEIGHT <= box.min.y) continue;
-      const push = circleRectPush(x, z, box);
-      if (push && (!hit || push.depth > hit.depth)) hit = push;
-    }
-    for (const ramp of hull.ramps) {
-      const push = steepRampPush(x, y, z, ramp);
-      if (push && (!hit || push.depth > hit.depth)) hit = push;
-    }
-    if (!hit || hit.depth <= 1e-5) break;
+    const hit = deepestWall(x, y, z, feetY, hull, canStep, 0);
+    if (!hit) break;
     const slop = hit.depth + 1e-4;
     x += hit.nx * slop;
     y += hit.ny * slop;
     z += hit.nz * slop;
-    wall = { x: hit.nx, y: hit.ny, z: hit.nz };
+    // Remove only the component into this face, then look for another contact.
+    next = clipAgainst(next, { x: hit.nx, y: hit.ny, z: hit.nz });
   }
-  return { position: { x, y, z }, wall };
+  return { position: { x, y, z }, velocity: next };
 }
 
 function collideMove(
@@ -458,6 +570,7 @@ function collideMove(
   hull: Hull,
   jumping: boolean,
   wasGrounded: boolean,
+  useGravity: boolean,
 ): { position: Vec3; velocity: Vec3; grounded: boolean } {
   const canStep = wasGrounded && !jumping;
   const proposed = {
@@ -465,18 +578,10 @@ function collideMove(
     y: origin.y,
     z: origin.z + velocity.z * dt,
   };
-  const slid = slideWalls(proposed, origin.y, hull, canStep);
-  let vx = velocity.x;
-  let vy = velocity.y;
-  let vz = velocity.z;
-  if (slid.wall && slid.wall.y < WALK_Y) {
-    const into = vx * slid.wall.x + vy * slid.wall.y + vz * slid.wall.z;
-    if (into < 0) {
-      vx -= slid.wall.x * into;
-      vy -= slid.wall.y * into;
-      vz -= slid.wall.z * into;
-    }
-  }
+  const slid = slideWalls(proposed, velocity, origin.y, hull, canStep);
+  let vx = slid.velocity.x;
+  let vy = slid.velocity.y;
+  let vz = slid.velocity.z;
 
   const floor = highestWalkable(slid.position.x, slid.position.z, hull);
   if (canStep) {
@@ -490,7 +595,14 @@ function collideMove(
     }
   }
 
-  const nextY = origin.y + vy * dt;
+  // Constant acceleration over the step: position uses the average velocity,
+  // so a 6.8 m/s jump under gravity 20 peaks at v²/2g instead of a step high.
+  let yDelta = vy * dt;
+  if (useGravity) {
+    yDelta = vy * dt - 0.5 * GRAVITY * dt * dt;
+    vy -= GRAVITY * dt;
+  }
+  const nextY = origin.y + yDelta;
   if (!jumping && vy <= 0 && origin.y + 0.03 >= floor.y && nextY <= floor.y + 0.03) {
     return {
       position: { x: slid.position.x, y: floor.y, z: slid.position.z },
