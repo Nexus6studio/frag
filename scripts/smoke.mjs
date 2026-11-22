@@ -248,7 +248,9 @@ async function assertShellFlow(page, errors) {
       deathHidden: death.hidden,
       deathText: death.textContent,
       cursor: canvas instanceof HTMLElement ? getComputedStyle(canvas).cursor : "missing",
-      debug: Object.prototype.hasOwnProperty.call(window, "__fragPlayer"),
+      debug:
+        Object.prototype.hasOwnProperty.call(window, "__fragPlayer") ||
+        Object.prototype.hasOwnProperty.call(window, "__fragMove"),
       barFromBottom: window.innerHeight - barBox.bottom,
       hpOnLeft: hpBox.left < window.innerWidth / 2,
       ammoOnRight: ammoBox.right > window.innerWidth / 2,
@@ -291,15 +293,65 @@ async function assertShellFlow(page, errors) {
       () => {
         const readout = document.querySelector("#fps-readout");
         const text = readout?.textContent ?? "";
-        return readout?.hidden === false && text.includes("fps") && text.includes("pos") && text.includes("sens");
+        return (
+          readout?.hidden === false &&
+          text.includes("fps") &&
+          text.includes("pos") &&
+          text.includes("sens") &&
+          text.includes("m/s") &&
+          text.includes("ground")
+        );
       },
       undefined,
       { timeout: 2_000 },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`fps readout did not show position and sensitivity: ${message}`);
+    errors.push(`fps readout did not show position, speed, and ground: ${message}`);
   }
+
+  const poseOf = (text) => {
+    const match = /pos (-?\d+\.\d+) (-?\d+\.\d+) (-?\d+\.\d+)/.exec(text ?? "");
+    if (!match) return null;
+    return { x: Number(match[1]), y: Number(match[2]), z: Number(match[3]) };
+  };
+  const beforeMove = poseOf(await page.locator("#fps-readout").innerText());
+  if (!beforeMove) {
+    errors.push("debug readout has no position before moving");
+  } else {
+    const locked = await page.evaluate(() => document.pointerLockElement != null);
+    if (!locked) errors.push("pointer did not lock; movement keys are not sampled");
+    await page.keyboard.down("KeyW");
+    try {
+      await page.evaluate(
+        () =>
+          new Promise((resolve) => {
+            const start = performance.now();
+            const tick = (now) => {
+              if (now - start >= 1000) resolve(undefined);
+              else requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }),
+      );
+    } finally {
+      await page.keyboard.up("KeyW");
+    }
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => resolve(undefined));
+        }),
+    );
+    const afterMove = poseOf(await page.locator("#fps-readout").innerText());
+    if (!afterMove) errors.push("debug readout has no position after moving");
+    else if (!(beforeMove.z - afterMove.z > 1)) {
+      errors.push(
+        `holding W did not move forward (z ${beforeMove.z.toFixed(2)} -> ${afterMove.z.toFixed(2)})`,
+      );
+    }
+  }
+
   await page.keyboard.press("F1");
   if (await page.locator("#fps-readout").evaluate((el) => !el.hidden)) {
     errors.push("f1 did not hide the fps readout");
@@ -452,7 +504,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> pause -> resume -> reload, no console errors`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, no console errors`,
       );
     }
   } finally {

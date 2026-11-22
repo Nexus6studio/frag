@@ -14,6 +14,8 @@ export interface DebugPose {
   yaw: number;
   pitch: number;
   sensitivity: number;
+  planarSpeed: number;
+  grounded: boolean;
 }
 
 export function mountShell(canvas: HTMLCanvasElement): {
@@ -177,7 +179,8 @@ export function mountShell(canvas: HTMLCanvasElement): {
         } else {
           const pos = `${pose.x.toFixed(2)} ${pose.y.toFixed(2)} ${pose.z.toFixed(2)}`;
           const angles = `yaw ${pose.yaw.toFixed(1)}  pitch ${pose.pitch.toFixed(1)}`;
-          fps.textContent = `${fpsLabel}  pos ${pos}  ${angles}  sens ${pose.sensitivity.toFixed(2)}`;
+          const stance = pose.grounded ? "ground" : "air";
+          fps.textContent = `${fpsLabel}  pos ${pos}  ${angles}  sens ${pose.sensitivity.toFixed(2)}  ${pose.planarSpeed.toFixed(2)} m/s  ${stance}`;
         }
       }
     },
