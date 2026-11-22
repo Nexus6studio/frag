@@ -84,17 +84,26 @@ html[data-cursor="none"] canvas {
   gap: 36px;
 }
 
+.hud-stat {
+  padding: 6px 8px 4px;
+  background: #14151c;
+}
+
 .hud-label {
   display: block;
   margin-bottom: 4px;
+  /* #f7f8ff on #14151c is about 17:1, above the WCAG AA 4.5:1 floor. */
   color: #f7f8ff;
+  font-size: 12px;
   font-size: clamp(12px, 1.7vh, 18px);
   letter-spacing: 0.14em;
+  line-height: 1.2;
   text-shadow:
     1px 0 0 #07080d,
     -1px 0 0 #07080d,
     0 1px 0 #07080d,
     0 -1px 0 #07080d;
+  text-size-adjust: 100%;
   text-transform: uppercase;
 }
 

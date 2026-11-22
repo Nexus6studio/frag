@@ -156,16 +156,15 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
   let vz = state.velocity.z;
   const startedGrounded = state.grounded;
   const grace = startedGrounded && state.timeOnGround <= LANDING_GRACE;
-  // One blocking face redirects the wish along that face, so ground accel
-  // restores the slide. A corner reports more than one face; keeping the
-  // original wish there lets the body creep out instead of braking to a stop.
+  // Nearby faces redirect the wish along the free direction. When every face
+  // opposes the wish, there is no slide and the corner can come to rest.
   const canStep = startedGrounded && !intent.jump;
   const contacts =
     startedGrounded && wish
       ? wallNormals(state.position, state.position.y, hull, canStep, CONTACT_SKIN)
       : [];
-  const projected = contacts.length === 1 ? projectPlanar(wish!, contacts) : null;
-  const steered = projected ?? wish;
+  const projected = contacts.length > 0 ? projectPlanar(wish!, contacts) : null;
+  const steered = contacts.length > 0 ? projected : wish;
 
   if (startedGrounded) {
     if (!grace) {
@@ -541,7 +540,6 @@ function slideWalls(
   let y = pos.y;
   let z = pos.z;
   let next = { x: velocity.x, y: velocity.y, z: velocity.z };
-  const contacts: Vec3[] = [];
   for (let iter = 0; iter < 4; iter += 1) {
     const hit = deepestWall(x, y, z, feetY, hull, canStep, 0);
     if (!hit) break;
@@ -549,13 +547,60 @@ function slideWalls(
     x += hit.nx * slop;
     y += hit.ny * slop;
     z += hit.nz * slop;
-    contacts.push({ x: hit.nx, y: hit.ny, z: hit.nz });
+    // Every contact drops the into-normal part of the stored velocity.
+    // Clipping only the last face left a corner pinned at full planar speed.
+    next = clipAgainst(next, { x: hit.nx, y: hit.ny, z: hit.nz });
   }
-  // One clip against the last surface. Clipping every push normal in a
-  // corner cancels the slide the body needs to leave the gap.
-  const normal = contacts[contacts.length - 1];
-  if (normal) next = clipAgainst(next, normal);
+  // A face you are resting on, not just one you penetrated this step.
+  const resting = wallNormals({ x, y, z }, feetY, hull, canStep, CONTACT_SKIN);
+  for (const normal of resting) next = clipAgainst(next, normal);
   return { position: { x, y, z }, velocity: next };
+}
+
+function overlapsFootprint(x: number, z: number, box: BoxSolid): boolean {
+  const cx = clamp(x, box.min.x, box.max.x);
+  const cz = clamp(z, box.min.z, box.max.z);
+  const dx = x - cx;
+  const dz = z - cz;
+  const reach = CAPSULE_RADIUS + 1e-3;
+  return dx * dx + dz * dz <= reach * reach;
+}
+
+/**
+ * A standing jump clears 1.156 m, but the lip is a vertical face and the
+ * capsule blocks on its radius until the feet are above the top. Air accel
+ * cannot cover that radius before the feet fall back under 0.8 m, so the
+ * front edge has to catch the lip: if the circle already touches a ledge
+ * the remaining jump can clear, step onto it.
+ */
+function mantleLanding(
+  x: number,
+  z: number,
+  feetY: number,
+  velocity: Vec3,
+  hull: Hull,
+): Vec3 | null {
+  if (!(velocity.y > 0)) return null;
+  const apex = feetY + (velocity.y * velocity.y) / (2 * GRAVITY);
+  let best: BoxSolid | null = null;
+  for (const box of hull.boxes) {
+    const top = box.max.y;
+    if (top <= feetY + 0.04) continue;
+    if (top > apex + 1e-3) continue;
+    if (feetY + CAPSULE_HEIGHT <= box.min.y) continue;
+    if (!overlapsFootprint(x, z, box)) continue;
+    if (!best || top > best.max.y) best = box;
+  }
+  if (!best) return null;
+  const inside = x >= best.min.x && x <= best.max.x && z >= best.min.z && z <= best.max.z;
+  if (inside) return { x, y: best.max.y, z };
+  const cx = clamp(x, best.min.x, best.max.x);
+  const cz = clamp(z, best.min.z, best.max.z);
+  const dx = cx - x;
+  const dz = cz - z;
+  if (velocity.x * dx + velocity.z * dz <= 1e-8) return null;
+  const len = Math.hypot(dx, dz) || 1;
+  return { x: cx + (dx / len) * 0.05, y: best.max.y, z: cz + (dz / len) * 0.05 };
 }
 
 function collideMove(
@@ -568,6 +613,17 @@ function collideMove(
   useGravity: boolean,
 ): { position: Vec3; velocity: Vec3; grounded: boolean } {
   const canStep = wasGrounded && !jumping;
+  if (jumping && velocity.y > 0) {
+    const mantled = mantleLanding(origin.x, origin.z, origin.y, velocity, hull);
+    if (mantled) {
+      const onto = slideWalls(mantled, velocity, mantled.y, hull, false);
+      return {
+        position: { x: onto.position.x, y: mantled.y, z: onto.position.z },
+        velocity: { x: onto.velocity.x, y: 0, z: onto.velocity.z },
+        grounded: true,
+      };
+    }
+  }
   const proposed = {
     x: origin.x + velocity.x * dt,
     y: origin.y,

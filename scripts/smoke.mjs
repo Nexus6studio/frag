@@ -142,23 +142,59 @@ function assertHorizontalFov(view, errors, label) {
   }
 }
 
+function contrastRatio(foreground, background) {
+  const channel = (hex) => {
+    const value = hex / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (rgb) => 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+  const parse = (color) => {
+    const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
+    if (!match) return null;
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+  };
+  const fg = parse(foreground);
+  const bg = parse(background);
+  if (!fg || !bg) return null;
+  const lighter = Math.max(luminance(fg), luminance(bg));
+  const darker = Math.min(luminance(fg), luminance(bg));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 async function assertReadableType(page, errors, label) {
   const fonts = await page.evaluate(() => {
-    const px = (selector) => {
-      const el = document.querySelector(selector);
-      if (!(el instanceof HTMLElement)) return null;
-      return Number.parseFloat(getComputedStyle(el).fontSize);
-    };
+    const px = (el) => (el instanceof HTMLElement ? Number.parseFloat(getComputedStyle(el).fontSize) : null);
+    const labels = [...document.querySelectorAll("#hud-hp-stat .hud-label, #hud-ammo-stat .hud-label")].map((el) => {
+      const style = getComputedStyle(el);
+      const stat = el.parentElement instanceof HTMLElement ? getComputedStyle(el.parentElement) : null;
+      return {
+        text: el.textContent,
+        size: px(el),
+        color: style.color,
+        backing: stat?.backgroundColor ?? "",
+      };
+    });
     return {
-      copy: px(".copy"),
-      label: px(".hud-label"),
-      eyebrow: px(".eyebrow"),
+      copy: px(document.querySelector(".copy")),
+      eyebrow: px(document.querySelector(".eyebrow")),
+      labels,
       height: window.innerHeight,
     };
   });
   if (!(fonts.copy >= 16)) errors.push(`${label}: body text is ${fonts.copy}px at ${fonts.height}px tall`);
-  if (!(fonts.label >= 12)) errors.push(`${label}: hud label is ${fonts.label}px at ${fonts.height}px tall`);
   if (!(fonts.eyebrow >= 12)) errors.push(`${label}: eyebrow is ${fonts.eyebrow}px at ${fonts.height}px tall`);
+  if (fonts.labels.length < 2) errors.push(`${label}: expected HP and AMMO labels, found ${fonts.labels.length}`);
+  for (const hudLabel of fonts.labels) {
+    if (!(hudLabel.size >= 12)) {
+      errors.push(`${label}: ${hudLabel.text} label is ${hudLabel.size}px at ${fonts.height}px tall`);
+    }
+    const ratio = contrastRatio(hudLabel.color, hudLabel.backing);
+    if (!(ratio >= 4.5)) {
+      errors.push(
+        `${label}: ${hudLabel.text} contrast ${ratio ?? "unreadable"} (${hudLabel.color} on ${hudLabel.backing})`,
+      );
+    }
+  }
 }
 
 async function hudMode(page) {
@@ -536,6 +572,15 @@ try {
     await assertReadableType(page, errors, "1080p");
     assertHorizontalFov(await readView(page), errors, "after resize 1920x1080");
 
+    await page.setViewportSize({ width: 1280, height: 480 });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
+    await assertReadableType(page, errors, "480p");
+
     const stats = await page.evaluate(() => {
       const canvas = document.querySelector("canvas");
       if (!(canvas instanceof HTMLCanvasElement) || canvas.fragStats == null) {
@@ -584,7 +629,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, readable type at 720p and 1080p, no console warnings outside the allowlist`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, readable type at 480p, 720p, and 1080p, no console warnings outside the allowlist`,
       );
     }
   } finally {

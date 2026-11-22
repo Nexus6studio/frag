@@ -24,10 +24,9 @@ import {
   MAP_HALF,
   PARAPET_Y,
   RING_INNER,
-  STAIR_COUNT,
-  STAIR_DEPTH,
-  STAIR_RISE,
+  STAIR_LAND_Z0,
   WELL_HALF,
+  stairCollisionBoxes,
   type AtriumPad,
   type AtriumRamp,
   type AtriumStair,
@@ -143,15 +142,13 @@ function addRamp(soup: Soup, ramp: AtriumRamp): void {
 }
 
 function addStair(soup: Soup, stair: AtriumStair): void {
-  for (let i = 0; i < STAIR_COUNT; i += 1) {
-    const along0 = i * STAIR_DEPTH;
-    const along1 = (i + 1) * STAIR_DEPTH;
-    const x0 = stair.dir === 1 ? stair.x0 + along0 : stair.x0 - along1;
-    const x1 = stair.dir === 1 ? stair.x0 + along1 : stair.x0 - along0;
-    soup.box(x0, x1, GROUND_Y, GROUND_Y + (i + 1) * STAIR_RISE, stair.z0, stair.z1);
+  // Draw the same solids the capsule walks. The portion under the concourse
+  // stays in the hull only, so the floor and the tread do not share a plane.
+  for (const solid of stairCollisionBoxes(stair)) {
+    const y0 = Math.max(solid.min.y, GROUND_Y);
+    if (solid.max.y - y0 < 0.02) continue;
+    soup.box(solid.min.x, solid.max.x, y0, solid.max.y, solid.min.z, solid.max.z);
   }
-  const landFar = stair.dir === 1 ? RING_INNER + 0.15 : -(RING_INNER + 0.15);
-  soup.box(stair.x1, landFar, GROUND_Y, CATWALK_Y, stair.z0, stair.z1);
 }
 
 function addStructure(soup: Soup): void {
@@ -177,16 +174,19 @@ function addStructure(soup: Soup): void {
   soup.box(-ring, -10.2, 0, PARAPET_Y, -ring, -c);
   soup.box(-7.6, 7.6, 0, PARAPET_Y, -ring, -c);
   soup.box(10.2, ring, 0, PARAPET_Y, -ring, -c);
-  soup.box(c, ring, 0, PARAPET_Y, -c, 8.5);
-  soup.box(c, ring, 0, PARAPET_Y, 10.7, c);
-  soup.box(-ring, -c, 0, PARAPET_Y, -c, 8.5);
-  soup.box(-ring, -c, 0, PARAPET_Y, 10.7, c);
+  soup.box(c, ring, 0, PARAPET_Y, -c, STAIR_LAND_Z0);
+  soup.box(-ring, -c, 0, PARAPET_Y, -c, STAIR_LAND_Z0);
 
   for (const ramp of ATRIUM_RAMPS) {
     addRamp(soup, ramp);
     soup.box(ramp.minX, ramp.maxX, GROUND_Y, CATWALK_Y, -ring, ramp.minZ);
-    soup.box(ramp.minX - 0.16, ramp.minX, GROUND_Y, PARAPET_Y - 0.05, ramp.minZ, ramp.maxZ);
-    soup.box(ramp.maxX, ramp.maxX + 0.16, GROUND_Y, PARAPET_Y - 0.05, ramp.minZ, ramp.maxZ);
+    const againstParapet = ramp.minX < 0 ? "west" : "east";
+    if (againstParapet !== "west") {
+      soup.box(ramp.minX, ramp.minX + 0.16, GROUND_Y, PARAPET_Y - 0.05, ramp.minZ, ramp.maxZ);
+    }
+    if (againstParapet !== "east") {
+      soup.box(ramp.maxX - 0.16, ramp.maxX, GROUND_Y, PARAPET_Y - 0.05, ramp.minZ, ramp.maxZ);
+    }
   }
   for (const stair of ATRIUM_STAIRS) addStair(soup, stair);
 
