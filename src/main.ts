@@ -99,9 +99,15 @@ window.addEventListener("resize", resize);
 resize();
 
 let lastTime = 0;
+// A software-GL frame can take longer than a display tick. Simulate up to a
+// quarter second of it so the body does not freeze, and drop anything longer
+// (a tab stall) instead of fast-forwarding. createMover currently consumes at
+// most 0.1 s per call, so the budget is handed over in slices.
+const FRAME_LIMIT = 0.25;
+const MOVER_SLICE = 0.1;
 
 function frame(time: number): void {
-  const frameDt = lastTime === 0 ? 0 : Math.min(0.1, Math.max(0, (time - lastTime) / 1000));
+  const frameDt = lastTime === 0 ? 0 : Math.max(0, (time - lastTime) / 1000);
   lastTime = time;
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
@@ -110,9 +116,17 @@ function frame(time: number): void {
     look.apply(controls.lookX, controls.lookY);
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
     if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
-    mover.advance(frameDt, intentFromInput(controls, look.yaw));
-    if (needsRespawn(mover.state.position)) {
-      mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+    const intent = intentFromInput(controls, look.yaw);
+    let left = Math.min(frameDt, FRAME_LIMIT);
+    if (left === 0) mover.advance(0, intent);
+    while (left > 1e-6) {
+      const slice = Math.min(left, MOVER_SLICE);
+      mover.advance(slice, intent);
+      left -= slice;
+      if (needsRespawn(mover.state.position)) {
+        mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+        break;
+      }
     }
   }
   const body = mover.state;

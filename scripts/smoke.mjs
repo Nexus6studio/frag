@@ -290,6 +290,9 @@ async function assertShellFlow(page, errors) {
     errors.push("backquote did not show the fps readout");
   }
   try {
+    // Poll on a timer, not requestAnimationFrame. Bloom on software GL can
+    // occupy the frame callback for longer than a display tick, and an rAF
+    // poll never runs until that callback returns.
     await page.waitForFunction(
       () => {
         const readout = document.querySelector("#fps-readout");
@@ -304,7 +307,7 @@ async function assertShellFlow(page, errors) {
         );
       },
       undefined,
-      { timeout: 2_000 },
+      { timeout: 15_000, polling: 250 },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
@@ -324,26 +327,22 @@ async function assertShellFlow(page, errors) {
     if (!locked) errors.push("pointer did not lock; movement keys are not sampled");
     await page.keyboard.down("KeyW");
     try {
-      await page.evaluate(
-        () =>
-          new Promise((resolve) => {
-            const start = performance.now();
-            const tick = (now) => {
-              if (now - start >= 1000) resolve(undefined);
-              else requestAnimationFrame(tick);
-            };
-            requestAnimationFrame(tick);
-          }),
+      await page.waitForFunction(
+        (startZ) => {
+          const text = document.querySelector("#fps-readout")?.textContent ?? "";
+          const match = /pos (-?\d+\.\d+) (-?\d+\.\d+) (-?\d+\.\d+)/.exec(text);
+          if (!match) return false;
+          return startZ - Number(match[3]) > 1;
+        },
+        beforeMove.z,
+        { timeout: 20_000, polling: 250 },
       );
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      errors.push(`holding W did not move forward within 20s: ${message}`);
     } finally {
       await page.keyboard.up("KeyW");
     }
-    await page.evaluate(
-      () =>
-        new Promise((resolve) => {
-          requestAnimationFrame(() => resolve(undefined));
-        }),
-    );
     const afterMove = poseOf(await page.locator("#fps-readout").innerText());
     if (!afterMove) errors.push("debug readout has no position after moving");
     else if (!(beforeMove.z - afterMove.z > 1)) {
