@@ -19,7 +19,6 @@ import {
   WALK_SLOPE_DEG,
   createMoveState,
   createMover,
-  createTestHull,
   exposeMoveDebug,
   flatHull,
   isWalkableNormal,
@@ -29,8 +28,26 @@ import {
 } from "../src/move.ts";
 
 const flat = flatHull();
-const hull = createTestHull();
 const still = { forward: 0, strafe: 0, jump: false, yawDeg: 0 };
+
+// The atrium replaced the test floor. These fixtures are the collision cases,
+// not the shipped map.
+const stepHull = {
+  boxes: [{ min: { x: 6, y: 0, z: -18 }, max: { x: 10, y: STEP_HEIGHT, z: -4 } }],
+  ramps: [],
+};
+const ledgeHull = {
+  boxes: [{ min: { x: 12, y: 0, z: -18 }, max: { x: 17, y: 1, z: -5 } }],
+  ramps: [],
+};
+const rampHull = {
+  boxes: [],
+  ramps: [{ minX: -3, maxX: 3, minZ: -2.5, maxZ: -1, yAtMaxZ: 0, rise: 1.5 }],
+};
+const pillarHull = {
+  boxes: [{ min: { x: -4.2, y: 0, z: -9 }, max: { x: -2.6, y: 3, z: -6.6 } }],
+  ramps: [],
+};
 
 function run(state, intent, seconds, world = flat) {
   const steps = Math.round(seconds / SIM_DT);
@@ -166,7 +183,7 @@ test("a 0.30 m step is walkable and a 1 m ledge is not", () => {
     createMoveState({ x: 8, y: 0, z: -2 }),
     { forward: 1, strafe: 0, jump: false, yawDeg: 0 },
     1.5,
-    hull,
+    stepHull,
   );
   assert.ok(
     Math.abs(stepped.state.position.y - STEP_HEIGHT) < 0.02,
@@ -179,7 +196,7 @@ test("a 0.30 m step is walkable and a 1 m ledge is not", () => {
     createMoveState({ x: 14.5, y: 0, z: -2 }),
     { forward: 1, strafe: 0, jump: false, yawDeg: 0 },
     2,
-    hull,
+    ledgeHull,
   );
   assert.ok(blocked.peak < 0.2, `ledge walk peak ${blocked.peak}`);
   assert.ok(blocked.state.position.z > -4.8, `walked into the ledge, z ${blocked.state.position.z}`);
@@ -191,7 +208,7 @@ test("the 45 degree ramp can be walked and the pillar blocks", () => {
     createMoveState({ x: 0, y: 0, z: 1 }),
     { forward: 1, strafe: 0, jump: false, yawDeg: 0 },
     3,
-    hull,
+    rampHull,
   );
   assert.ok(climbed.groundedAbove > 1, `ramp grounded height ${climbed.groundedAbove}`);
   assert.ok(climbed.peak > 1, `ramp peak ${climbed.peak}`);
@@ -200,7 +217,7 @@ test("the 45 degree ramp can be walked and the pillar blocks", () => {
     createMoveState({ x: -3.4, y: 0, z: -4 }),
     { forward: 1, strafe: 0, jump: false, yawDeg: 0 },
     2,
-    hull,
+    pillarHull,
   );
   assert.ok(pillar.state.position.z > -6.35, `passed the pillar, z ${pillar.state.position.z}`);
   assert.ok(pillar.peak < 0.2, `pillar climb ${pillar.peak}`);
@@ -218,7 +235,7 @@ test("a running jump lands on the 1 m ledge", () => {
       state,
       { forward: 1, strafe: 0, jump, yawDeg: 0 },
       SIM_DT,
-      hull,
+      ledgeHull,
     );
     if (jumped && state.grounded && state.position.y > 0.85) {
       landed = true;
@@ -393,7 +410,7 @@ test("a full-speed walk climbs the 45 degree ramp and a steeper face blocks", ()
   let minOnSlope = 99;
   let maxGrounded = 0;
   for (let i = 0; i < Math.round(1.2 / SIM_DT); i += 1) {
-    state = stepMovement(state, intent, SIM_DT, hull);
+    state = stepMovement(state, intent, SIM_DT, rampHull);
     if (state.grounded && state.position.y > 0.2 && state.position.y < 1.4) {
       minOnSlope = Math.min(minOnSlope, planarSpeedOf(state.velocity));
     }

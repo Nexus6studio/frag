@@ -1,13 +1,29 @@
-import { AmbientLight, Color, DirectionalLight, PerspectiveCamera, Scene, WebGLRenderer } from "three";
-import { addTestFloor } from "./floor";
+import {
+  Color,
+  DirectionalLight,
+  FogExp2,
+  HemisphereLight,
+  NoToneMapping,
+  PerspectiveCamera,
+  Scene,
+  SRGBColorSpace,
+  Vector2,
+  WebGLRenderer,
+} from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
+import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium } from "./floor.ts";
 import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
 import { createLook } from "./look";
 import {
   EYE_HEIGHT,
-  SPAWN,
+  MAX_FRAME_SECONDS,
+  createMoveState,
   createMover,
-  createTestHull,
   exposeMoveDebug,
   intentFromInput,
   planarSpeedOf,
@@ -20,6 +36,11 @@ const renderer = new WebGLRenderer({
   // The headless smoke test reads pixels after the browser composites.
   preserveDrawingBuffer: true,
 });
+renderer.outputColorSpace = SRGBColorSpace;
+renderer.toneMapping = NoToneMapping;
+renderer.shadowMap.enabled = false;
+// Count every pass in the frame, including the half-resolution bloom.
+renderer.info.autoReset = false;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
@@ -28,23 +49,46 @@ const input = createInput(renderer.domElement);
 const player = createPlayerState();
 mountHud(player);
 
-const hull = createTestHull();
-const mover = createMover(hull);
+const hull = createAtriumHull();
+let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
 
 const scene = new Scene();
-scene.background = new Color(0x111118);
-addTestFloor(scene, hull);
+scene.background = new Color(ATRIUM_CLEAR);
+scene.fog = new FogExp2(ATRIUM_FOG, 0.015);
+addAtrium(scene);
+scene.add(new HemisphereLight(0x8ea4bc, 0x1a120c, 0.55));
+const sheen = new DirectionalLight(0xd5e4f2, 0.85);
+sheen.position.set(-6, 14, 8);
+sheen.castShadow = false;
+scene.add(sheen);
 
-const camera = new PerspectiveCamera(50, 1, 0.1, 150);
-camera.position.set(SPAWN.x, SPAWN.y + EYE_HEIGHT, SPAWN.z);
+const camera = new PerspectiveCamera(50, 1, 0.08, 80);
+camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z);
 camera.rotation.order = "YXZ";
-camera.lookAt(SPAWN.x, SPAWN.y + EYE_HEIGHT, SPAWN.z - 1);
+camera.lookAt(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z - 1);
 const look = createLook(camera);
-// The smoke test reads the live camera fov from the canvas.
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new Vector2(window.innerWidth, window.innerHeight), 0.28, 0.32, 0.88);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// The smoke test reads the live camera fov and the frame's draw counters.
 Object.defineProperty(renderer.domElement, "fragView", {
   configurable: true,
   enumerable: false,
   value: look.view,
+});
+Object.defineProperty(renderer.domElement, "fragStats", {
+  configurable: true,
+  enumerable: false,
+  get() {
+    return {
+      calls: renderer.info.render.calls,
+      triangles: renderer.info.render.triangles,
+    };
+  },
 });
 
 if (import.meta.env.DEV) {
@@ -52,15 +96,11 @@ if (import.meta.env.DEV) {
   exposeMoveDebug(window, () => mover.state);
 }
 
-const keyLight = new DirectionalLight(0xffffff, 2.4);
-keyLight.position.set(3, 8, 2);
-scene.add(keyLight);
-scene.add(new AmbientLight(0xffffff, 0.55));
-
 function resize(): void {
   // 105° horizontal. PerspectiveCamera.fov is vertical; look.resize derives it.
   look.resize(window.innerWidth, window.innerHeight);
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 }
 
 window.addEventListener("resize", resize);
@@ -69,7 +109,7 @@ resize();
 let lastTime = 0;
 
 function frame(time: number): void {
-  // Stall clamping lives in the mover, so the game and the headless loop share one budget.
+  // The mover clamps a stall at 250 ms and keeps the sub-step remainder.
   const frameDt = lastTime === 0 ? 0 : Math.max(0, (time - lastTime) / 1000);
   lastTime = time;
   const captured =
@@ -79,7 +119,11 @@ function frame(time: number): void {
     look.apply(controls.lookX, controls.lookY);
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
     if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
-    mover.advance(frameDt, intentFromInput(controls, look.yaw));
+    const intent = intentFromInput(controls, look.yaw);
+    mover.advance(Math.min(frameDt, MAX_FRAME_SECONDS), intent);
+    if (needsRespawn(mover.state.position)) {
+      mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+    }
   }
   const body = mover.state;
   camera.position.set(body.position.x, body.position.y + EYE_HEIGHT, body.position.z);
@@ -94,7 +138,8 @@ function frame(time: number): void {
     planarSpeed: planarSpeedOf(body.velocity),
     grounded: body.grounded,
   });
-  renderer.render(scene, camera);
+  renderer.info.reset();
+  composer.render();
   requestAnimationFrame(frame);
 }
 

@@ -113,24 +113,6 @@ export function flatHull(): Hull {
   return { boxes: [], ramps: [] };
 }
 
-/**
- * Ground, a 0.30 m step, a 1 m ledge, a pillar, and a 45° ramp.
- * The ramp sits in front of the spawn: 1.5 m tall over 1.5 m of run, so the
- * near face is the slope rather than a tall wall.
- */
-export function createTestHull(): Hull {
-  return {
-    boxes: [
-      { min: { x: 6, y: 0, z: -18 }, max: { x: 10, y: STEP_HEIGHT, z: -4 } },
-      { min: { x: 12, y: 0, z: -18 }, max: { x: 17, y: 1, z: -5 } },
-      { min: { x: -4.2, y: 0, z: -9 }, max: { x: -2.6, y: 3, z: -6.6 } },
-    ],
-    ramps: [
-      { minX: -3, maxX: 3, minZ: -2.5, maxZ: -1, yAtMaxZ: 0, rise: 1.5 },
-    ],
-  };
-}
-
 export function isWalkableNormal(normalY: number): boolean {
   return normalY >= WALK_Y - 1e-6;
 }
@@ -174,13 +156,16 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
   let vz = state.velocity.z;
   const startedGrounded = state.grounded;
   const grace = startedGrounded && state.timeOnGround <= LANDING_GRACE;
-  // A wish aimed into a wall we are already touching is steered along that wall
-  // before friction, so the slide is not treated as uncommanded speed.
+  // One blocking face redirects the wish along that face, so ground accel
+  // restores the slide. A corner reports more than one face; keeping the
+  // original wish there lets the body creep out instead of braking to a stop.
   const canStep = startedGrounded && !intent.jump;
-  const steered =
+  const contacts =
     startedGrounded && wish
-      ? projectPlanar(wish, wallNormals(state.position, state.position.y, hull, canStep, CONTACT_SKIN))
-      : wish;
+      ? wallNormals(state.position, state.position.y, hull, canStep, CONTACT_SKIN)
+      : [];
+  const projected = contacts.length === 1 ? projectPlanar(wish!, contacts) : null;
+  const steered = projected ?? wish;
 
   if (startedGrounded) {
     if (!grace) {
@@ -434,25 +419,31 @@ function projectPlanar(wish: { x: number; z: number }, normals: Vec3[]): { x: nu
   return { x: x / length, z: z / length };
 }
 
-/** Point vs the box expanded by the capsule radius. Normals stay on the faces, so a corner cannot cancel the slide. */
+/** Capsule circle against a box. Faces stay axis-aligned; a real corner uses the direction off that corner so the body can slide out of a gap. */
 function boxPush(x: number, z: number, box: BoxSolid, padding = 0): WallPush | null {
   const reach = CAPSULE_RADIUS + padding;
-  const minX = box.min.x - reach;
-  const maxX = box.max.x + reach;
-  const minZ = box.min.z - reach;
-  const maxZ = box.max.z + reach;
-  if (x < minX || x > maxX || z < minZ || z > maxZ) return null;
-  const faces = [
-    { depth: x - minX, nx: -1, nz: 0 },
-    { depth: maxX - x, nx: 1, nz: 0 },
-    { depth: z - minZ, nx: 0, nz: -1 },
-    { depth: maxZ - z, nx: 0, nz: 1 },
-  ];
-  let best = faces[0]!;
-  for (const face of faces) {
-    if (face.depth < best.depth) best = face;
+  const { min, max } = box;
+  const inside = x >= min.x && x <= max.x && z >= min.z && z <= max.z;
+  if (inside) {
+    const faces = [
+      { depth: x - min.x + reach, nx: -1, nz: 0 },
+      { depth: max.x - x + reach, nx: 1, nz: 0 },
+      { depth: z - min.z + reach, nx: 0, nz: -1 },
+      { depth: max.z - z + reach, nx: 0, nz: 1 },
+    ];
+    let best = faces[0]!;
+    for (const face of faces) {
+      if (face.depth < best.depth) best = face;
+    }
+    return { ...best, ny: 0 };
   }
-  return { ...best, ny: 0 };
+  const cx = clamp(x, min.x, max.x);
+  const cz = clamp(z, min.z, max.z);
+  const dx = x - cx;
+  const dz = z - cz;
+  const dist = Math.hypot(dx, dz);
+  if (dist >= reach || dist < 1e-10) return null;
+  return { depth: reach - dist, nx: dx / dist, nz: dz / dist, ny: 0 };
 }
 
 function steepRampPush(
@@ -550,6 +541,7 @@ function slideWalls(
   let y = pos.y;
   let z = pos.z;
   let next = { x: velocity.x, y: velocity.y, z: velocity.z };
+  const contacts: Vec3[] = [];
   for (let iter = 0; iter < 4; iter += 1) {
     const hit = deepestWall(x, y, z, feetY, hull, canStep, 0);
     if (!hit) break;
@@ -557,9 +549,12 @@ function slideWalls(
     x += hit.nx * slop;
     y += hit.ny * slop;
     z += hit.nz * slop;
-    // Remove only the component into this face, then look for another contact.
-    next = clipAgainst(next, { x: hit.nx, y: hit.ny, z: hit.nz });
+    contacts.push({ x: hit.nx, y: hit.ny, z: hit.nz });
   }
+  // One clip against the last surface. Clipping every push normal in a
+  // corner cancels the slide the body needs to leave the gap.
+  const normal = contacts[contacts.length - 1];
+  if (normal) next = clipAgainst(next, normal);
   return { position: { x, y, z }, velocity: next };
 }
 
