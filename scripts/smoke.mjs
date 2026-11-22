@@ -77,6 +77,16 @@ async function previewExited() {
 
 const errors = [];
 
+// Chrome's OpenGL backend prints this four times while compositing WebGL, then
+// adds "(this message will no longer repeat)". The page never calls readPixels.
+const warningAllowlist = [
+  {
+    pattern: /GPU stall due to ReadPixels/,
+    reason:
+      "Chrome/ANGLE logs a driver stall four times on load when its OpenGL backend copies the WebGL canvas to the screen. Frag does not read pixels there, and page script cannot silence the driver notice.",
+  },
+];
+
 function phaseOf(page) {
   return page.locator("#app-shell").getAttribute("data-phase");
 }
@@ -130,6 +140,25 @@ function assertHorizontalFov(view, errors, label) {
   if (Math.abs(horizontal - 105) > 0.02) {
     errors.push(`${label}: horizontal fov ${horizontal.toFixed(4)}°, expected 105°`);
   }
+}
+
+async function assertReadableType(page, errors, label) {
+  const fonts = await page.evaluate(() => {
+    const px = (selector) => {
+      const el = document.querySelector(selector);
+      if (!(el instanceof HTMLElement)) return null;
+      return Number.parseFloat(getComputedStyle(el).fontSize);
+    };
+    return {
+      copy: px(".copy"),
+      label: px(".hud-label"),
+      eyebrow: px(".eyebrow"),
+      height: window.innerHeight,
+    };
+  });
+  if (!(fonts.copy >= 16)) errors.push(`${label}: body text is ${fonts.copy}px at ${fonts.height}px tall`);
+  if (!(fonts.label >= 12)) errors.push(`${label}: hud label is ${fonts.label}px at ${fonts.height}px tall`);
+  if (!(fonts.eyebrow >= 12)) errors.push(`${label}: eyebrow is ${fonts.eyebrow}px at ${fonts.height}px tall`);
 }
 
 async function hudMode(page) {
@@ -186,14 +215,21 @@ async function assertShellFlow(page, errors) {
   }
 
   try {
+    // Poll from the test runner. The default rAF poll stalls behind a software-GL
+    // frame, so a HUD that is already in play mode can miss a 2s rAF budget.
     await page.waitForFunction(
       () => document.querySelector("#hud")?.getAttribute("data-mode") === "play",
       undefined,
-      { timeout: 2_000 },
+      { timeout: 2_000, polling: 50 },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`hud did not show during play: ${message}`);
+    const snap = await page.evaluate(() => ({
+      phase: document.querySelector("#app-shell")?.getAttribute("data-phase"),
+      mode: document.querySelector("#hud")?.getAttribute("data-mode"),
+      locked: document.pointerLockElement != null,
+    }));
+    errors.push(`hud did not show during play (${JSON.stringify(snap)}): ${message}`);
   }
   const readout = await page.evaluate(() => {
     const hp = document.querySelector("#hud-hp");
@@ -424,7 +460,12 @@ try {
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     page.on("console", (message) => {
-      if (message.type() === "error") errors.push(`console: ${message.text()}`);
+      const text = message.text();
+      if (message.type() === "error") errors.push(`console: ${text}`);
+      if (message.type() === "warning") {
+        const allowed = warningAllowlist.find((entry) => entry.pattern.test(text));
+        if (!allowed) errors.push(`console warning: ${text}`);
+      }
     });
     page.on("pageerror", (error) => {
       errors.push(`pageerror: ${error.message}`);
@@ -481,15 +522,20 @@ try {
     }
 
     assertHorizontalFov(await readView(page), errors, "initial viewport");
+    await assertReadableType(page, errors, "720p");
 
     await assertShellFlow(page, errors);
 
+    await page.setViewportSize({ width: 1920, height: 1080 });
     await page.evaluate(
       () =>
         new Promise((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
         }),
     );
+    await assertReadableType(page, errors, "1080p");
+    assertHorizontalFov(await readView(page), errors, "after resize 1920x1080");
+
     const stats = await page.evaluate(() => {
       const canvas = document.querySelector("canvas");
       if (!(canvas instanceof HTMLCanvasElement) || canvas.fragStats == null) {
@@ -538,7 +584,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, empty localStorage, no console errors, no third-party requests`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, readable type at 720p and 1080p, no console warnings outside the allowlist`,
       );
     }
   } finally {

@@ -88,7 +88,7 @@ html[data-cursor="none"] canvas {
   display: block;
   margin-bottom: 4px;
   color: #f7f8ff;
-  font-size: 11px;
+  font-size: clamp(12px, 1.7vh, 18px);
   letter-spacing: 0.14em;
   text-shadow:
     1px 0 0 #07080d,
