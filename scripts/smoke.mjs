@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -289,6 +290,9 @@ async function assertShellFlow(page, errors) {
     errors.push("backquote did not show the fps readout");
   }
   try {
+    // Poll on a timer, not requestAnimationFrame. Bloom on software GL can
+    // occupy the frame callback for longer than a display tick, and an rAF
+    // poll never runs until that callback returns.
     await page.waitForFunction(
       () => {
         const readout = document.querySelector("#fps-readout");
@@ -303,7 +307,7 @@ async function assertShellFlow(page, errors) {
         );
       },
       undefined,
-      { timeout: 2_000 },
+      { timeout: 15_000, polling: 250 },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
@@ -323,26 +327,22 @@ async function assertShellFlow(page, errors) {
     if (!locked) errors.push("pointer did not lock; movement keys are not sampled");
     await page.keyboard.down("KeyW");
     try {
-      await page.evaluate(
-        () =>
-          new Promise((resolve) => {
-            const start = performance.now();
-            const tick = (now) => {
-              if (now - start >= 1000) resolve(undefined);
-              else requestAnimationFrame(tick);
-            };
-            requestAnimationFrame(tick);
-          }),
+      await page.waitForFunction(
+        (startZ) => {
+          const text = document.querySelector("#fps-readout")?.textContent ?? "";
+          const match = /pos (-?\d+\.\d+) (-?\d+\.\d+) (-?\d+\.\d+)/.exec(text);
+          if (!match) return false;
+          return startZ - Number(match[3]) > 1;
+        },
+        beforeMove.z,
+        { timeout: 20_000, polling: 250 },
       );
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      errors.push(`holding W did not move forward within 20s: ${message}`);
     } finally {
       await page.keyboard.up("KeyW");
     }
-    await page.evaluate(
-      () =>
-        new Promise((resolve) => {
-          requestAnimationFrame(() => resolve(undefined));
-        }),
-    );
     const afterMove = poseOf(await page.locator("#fps-readout").innerText());
     if (!afterMove) errors.push("debug readout has no position after moving");
     else if (!(beforeMove.z - afterMove.z > 1)) {
@@ -437,6 +437,10 @@ try {
 
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 15_000 });
     await page.waitForSelector("canvas", { timeout: 5_000 });
+    const storedOnLoad = await page.evaluate(() => Object.keys(localStorage));
+    if (storedOnLoad.length > 0) {
+      errors.push(`localStorage was not empty on load: ${storedOnLoad.join(", ")}`);
+    }
     await page.evaluate(
       () =>
         new Promise((resolve) => {
@@ -480,6 +484,36 @@ try {
 
     await assertShellFlow(page, errors);
 
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
+    const stats = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      if (!(canvas instanceof HTMLCanvasElement) || canvas.fragStats == null) {
+        return { error: "fragStats missing" };
+      }
+      return canvas.fragStats;
+    });
+    if (stats.error) errors.push(stats.error);
+    else {
+      if (!(stats.triangles > 0 && stats.triangles <= 50_000)) {
+        errors.push(`renderer triangles ${stats.triangles} outside 1..50000`);
+      }
+      if (!(stats.calls > 0 && stats.calls <= 80)) {
+        errors.push(`renderer draw calls ${stats.calls} outside 1..80`);
+      }
+    }
+
+    const shotDir = path.join(root, "test-results");
+    fs.mkdirSync(shotDir, { recursive: true });
+    const shot = path.join(shotDir, "atrium-smoke.png");
+    await page.screenshot({ path: shot });
+    const artifacts = "/opt/cursor/artifacts";
+    if (fs.existsSync(artifacts)) fs.copyFileSync(shot, path.join(artifacts, "atrium-smoke.png"));
+
     await page.setViewportSize({ width: 900, height: 700 });
     await page.evaluate(
       () =>
@@ -504,7 +538,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, no console errors`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, empty localStorage, no console errors, no third-party requests`,
       );
     }
   } finally {

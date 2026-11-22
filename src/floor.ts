@@ -1,78 +1,372 @@
-// Test-floor meshes. Collision lives in move.ts; these shapes are only drawn.
+// Neon Atrium meshes. Collision stays in the hull; these shapes are only drawn.
+// Geometry is built in code from the atrium plan. Nothing here is a loaded model.
 
 import {
-  BoxGeometry,
   BufferGeometry,
-  DoubleSide,
+  CanvasTexture,
   Float32BufferAttribute,
   Mesh,
-  MeshStandardMaterial,
-  PlaneGeometry,
-  Scene,
+  MeshBasicMaterial,
+  MeshPhongMaterial,
+  SRGBColorSpace,
+  type Scene,
 } from "three";
-import type { BoxSolid, Hull, RampSolid } from "./move";
+import {
+  ATRIUM_CRATES,
+  ATRIUM_PADS,
+  ATRIUM_PILLARS,
+  ATRIUM_RAMPS,
+  ATRIUM_STAIRS,
+  CATWALK_Y,
+  CEILING_Y,
+  CONCOURSE,
+  GROUND_Y,
+  MAP_HALF,
+  PARAPET_Y,
+  RING_INNER,
+  STAIR_COUNT,
+  STAIR_DEPTH,
+  STAIR_RISE,
+  WELL_HALF,
+  type AtriumPad,
+  type AtriumRamp,
+  type AtriumStair,
+} from "./atrium.ts";
 
-export function addTestFloor(scene: Scene, hull: Hull): void {
-  const ground = new Mesh(
-    new PlaneGeometry(80, 80),
-    new MeshStandardMaterial({ color: 0x3c4454, roughness: 0.92, metalness: 0 }),
-  );
-  ground.rotation.x = -Math.PI / 2;
-  scene.add(ground);
+const VOID = 0x0a0b10;
+const CONCRETE = 0x1a1d24;
+const CYAN = 0x00e5ff;
+const MAGENTA = 0xff2e9f;
+const ACID = 0xc8ff3d;
+const ALERT = 0xff3b3b;
+const AMBER = 0xf5a623;
 
-  for (const box of hull.boxes) scene.add(boxMesh(box));
-  for (const ramp of hull.ramps) scene.add(rampMesh(ramp));
+class Soup {
+  readonly position: number[] = [];
+  readonly normal: number[] = [];
+
+  get triangles(): number {
+    return this.position.length / 9;
+  }
+
+  geometry(): BufferGeometry {
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new Float32BufferAttribute(this.position, 3));
+    geometry.setAttribute("normal", new Float32BufferAttribute(this.normal, 3));
+    return geometry;
+  }
+
+  face(
+    a: readonly [number, number, number],
+    b: readonly [number, number, number],
+    c: readonly [number, number, number],
+    d: readonly [number, number, number],
+    n: readonly [number, number, number],
+  ): void {
+    this.tri(a, b, c, n);
+    this.tri(a, c, d, n);
+  }
+
+  tri(
+    a: readonly [number, number, number],
+    b: readonly [number, number, number],
+    c: readonly [number, number, number],
+    n: readonly [number, number, number],
+  ): void {
+    this.position.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    this.normal.push(n[0], n[1], n[2], n[0], n[1], n[2], n[0], n[1], n[2]);
+  }
+
+  box(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): void {
+    const xa = Math.min(x0, x1);
+    const xb = Math.max(x0, x1);
+    const ya = Math.min(y0, y1);
+    const yb = Math.max(y0, y1);
+    const za = Math.min(z0, z1);
+    const zb = Math.max(z0, z1);
+    this.face([xa, yb, zb], [xb, yb, zb], [xb, yb, za], [xa, yb, za], [0, 1, 0]);
+    this.face([xa, ya, za], [xb, ya, za], [xb, ya, zb], [xa, ya, zb], [0, -1, 0]);
+    this.face([xb, ya, za], [xb, yb, za], [xb, yb, zb], [xb, ya, zb], [1, 0, 0]);
+    this.face([xa, ya, zb], [xa, yb, zb], [xa, yb, za], [xa, ya, za], [-1, 0, 0]);
+    this.face([xa, ya, zb], [xb, ya, zb], [xb, yb, zb], [xa, yb, zb], [0, 0, 1]);
+    this.face([xb, ya, za], [xa, ya, za], [xa, yb, za], [xb, yb, za], [0, 0, -1]);
+  }
 }
 
-function boxMesh(box: BoxSolid): Mesh {
-  const sx = box.max.x - box.min.x;
-  const sy = box.max.y - box.min.y;
-  const sz = box.max.z - box.min.z;
-  const mesh = new Mesh(new BoxGeometry(sx, sy, sz), solidMaterial(colorForHeight(sy)));
-  mesh.position.set(
-    (box.min.x + box.max.x) / 2,
-    (box.min.y + box.max.y) / 2,
-    (box.min.z + box.max.z) / 2,
+function concreteMesh(soup: Soup): Mesh {
+  // Emissive keeps the concrete at its palette value with the lights off.
+  // Specular is the cheap wet gloss; nothing here casts a shadow map.
+  const mesh = new Mesh(
+    soup.geometry(),
+    new MeshPhongMaterial({
+      color: 0x000000,
+      emissive: CONCRETE,
+      specular: 0x9aa8b8,
+      shininess: 42,
+    }),
   );
+  mesh.name = "atrium-concrete";
   return mesh;
 }
 
-function colorForHeight(height: number): number {
-  if (height <= 0.4) return 0x3dff9a;
-  if (height <= 1.2) return 0xf5a623;
-  return 0xff4fa3;
+function glowMesh(soup: Soup, color: number, name: string): Mesh {
+  const mesh = new Mesh(
+    soup.geometry(),
+    new MeshBasicMaterial({
+      color,
+      toneMapped: false,
+    }),
+  );
+  mesh.name = name;
+  return mesh;
 }
 
-function rampMesh(ramp: RampSolid): Mesh {
-  const y0 = ramp.yAtMaxZ;
-  const y1 = ramp.yAtMaxZ + ramp.rise;
-  const x0 = ramp.minX;
-  const x1 = ramp.maxX;
-  const z0 = ramp.minZ;
-  const z1 = ramp.maxZ;
-  const positions = [
-    x0, y0, z1, x1, y0, z1, x1, y1, z0,
-    x0, y0, z1, x1, y1, z0, x0, y1, z0,
-    x0, 0, z1, x1, 0, z1, x1, y0, z1,
-    x0, 0, z1, x1, y0, z1, x0, y0, z1,
-    x0, 0, z0, x0, y1, z0, x1, y1, z0,
-    x0, 0, z0, x1, y1, z0, x1, 0, z0,
-    x0, 0, z1, x0, y0, z1, x0, y1, z0,
-    x0, 0, z1, x0, y1, z0, x0, 0, z0,
-    x1, 0, z1, x1, y1, z0, x1, y0, z1,
-    x1, 0, z1, x1, 0, z0, x1, y1, z0,
+function addRamp(soup: Soup, ramp: AtriumRamp): void {
+  const yHigh = ramp.yLow + ramp.rise;
+  const a: [number, number, number] = [ramp.minX, ramp.yLow, ramp.maxZ];
+  const b: [number, number, number] = [ramp.maxX, ramp.yLow, ramp.maxZ];
+  const c: [number, number, number] = [ramp.maxX, yHigh, ramp.minZ];
+  const d: [number, number, number] = [ramp.minX, yHigh, ramp.minZ];
+  const span = ramp.maxZ - ramp.minZ;
+  const slope = span === 0 ? 0 : ramp.rise / span;
+  const len = Math.hypot(1, slope);
+  soup.face(a, b, c, d, [0, 1 / len, slope / len]);
+  soup.tri(a, d, [ramp.minX, ramp.yLow, ramp.minZ], [-1, 0, 0]);
+  soup.tri(b, [ramp.maxX, ramp.yLow, ramp.minZ], c, [1, 0, 0]);
+  soup.face(
+    [ramp.minX, ramp.yLow, ramp.minZ],
+    [ramp.maxX, ramp.yLow, ramp.minZ],
+    c,
+    d,
+    [0, 0, -1],
+  );
+}
+
+function addStair(soup: Soup, stair: AtriumStair): void {
+  for (let i = 0; i < STAIR_COUNT; i += 1) {
+    const along0 = i * STAIR_DEPTH;
+    const along1 = (i + 1) * STAIR_DEPTH;
+    const x0 = stair.dir === 1 ? stair.x0 + along0 : stair.x0 - along1;
+    const x1 = stair.dir === 1 ? stair.x0 + along1 : stair.x0 - along0;
+    soup.box(x0, x1, GROUND_Y, GROUND_Y + (i + 1) * STAIR_RISE, stair.z0, stair.z1);
+  }
+  const landFar = stair.dir === 1 ? RING_INNER + 0.15 : -(RING_INNER + 0.15);
+  soup.box(stair.x1, landFar, GROUND_Y, CATWALK_Y, stair.z0, stair.z1);
+}
+
+function addStructure(soup: Soup): void {
+  const w = WELL_HALF;
+  const c = CONCOURSE;
+  const ring = RING_INNER;
+  const edge = MAP_HALF;
+  soup.box(-w, w, -0.06, 0, -w, w);
+  soup.box(-c, c, 0, GROUND_Y, w, c);
+  soup.box(-c, c, 0, GROUND_Y, -c, -w);
+  soup.box(-c, -w, 0, GROUND_Y, -w, w);
+  soup.box(w, c, 0, GROUND_Y, -w, w);
+
+  // Outer ring. The inner edge stops a centimetre short of the parapet so the
+  // shared plane does not flicker.
+  const seam = 0.02;
+  soup.box(-edge, edge, 0, CATWALK_Y, ring + seam, edge);
+  soup.box(-edge, edge, 0, CATWALK_Y, -edge, -(ring + seam));
+  soup.box(ring + seam, edge, 0, CATWALK_Y, -ring, ring);
+  soup.box(-edge, -(ring + seam), 0, CATWALK_Y, -ring, ring);
+
+  soup.box(-ring, ring, 0, PARAPET_Y, c, ring);
+  soup.box(-ring, -10.2, 0, PARAPET_Y, -ring, -c);
+  soup.box(-7.6, 7.6, 0, PARAPET_Y, -ring, -c);
+  soup.box(10.2, ring, 0, PARAPET_Y, -ring, -c);
+  soup.box(c, ring, 0, PARAPET_Y, -c, 8.5);
+  soup.box(c, ring, 0, PARAPET_Y, 10.7, c);
+  soup.box(-ring, -c, 0, PARAPET_Y, -c, 8.5);
+  soup.box(-ring, -c, 0, PARAPET_Y, 10.7, c);
+
+  for (const ramp of ATRIUM_RAMPS) {
+    addRamp(soup, ramp);
+    soup.box(ramp.minX, ramp.maxX, GROUND_Y, CATWALK_Y, -ring, ramp.minZ);
+    soup.box(ramp.minX - 0.16, ramp.minX, GROUND_Y, PARAPET_Y - 0.05, ramp.minZ, ramp.maxZ);
+    soup.box(ramp.maxX, ramp.maxX + 0.16, GROUND_Y, PARAPET_Y - 0.05, ramp.minZ, ramp.maxZ);
+  }
+  for (const stair of ATRIUM_STAIRS) addStair(soup, stair);
+
+  for (const pillar of ATRIUM_PILLARS) {
+    soup.box(
+      pillar.x - pillar.half,
+      pillar.x + pillar.half,
+      GROUND_Y,
+      pillar.top,
+      pillar.z - pillar.half,
+      pillar.z + pillar.half,
+    );
+  }
+
+  soup.box(ATRIUM_CRATES.x0, ATRIUM_CRATES.x1, ATRIUM_CRATES.y0, ATRIUM_CRATES.y0 + ATRIUM_CRATES.height, ATRIUM_CRATES.z0, ATRIUM_CRATES.z1);
+  soup.box(
+    ATRIUM_CRATES.x0,
+    ATRIUM_CRATES.x1,
+    ATRIUM_CRATES.y0 + ATRIUM_CRATES.height,
+    ATRIUM_CRATES.y0 + ATRIUM_CRATES.height * 2,
+    ATRIUM_CRATES.z0,
+    ATRIUM_CRATES.z1,
+  );
+  soup.box(1.7, 3.5, 0, 0.28, -2.55, -2.15);
+
+  const wall = 0.4;
+  soup.box(-edge, edge, 0, CEILING_Y, edge, edge + wall);
+  soup.box(-edge, edge, 0, CEILING_Y, -(edge + wall), -edge);
+  soup.box(edge, edge + wall, 0, CEILING_Y, -edge, edge);
+  soup.box(-(edge + wall), -edge, 0, CEILING_Y, -edge, edge);
+
+  const sky = 6.2;
+  const slab = 0.22;
+  const cy = CEILING_Y - 0.05;
+  soup.box(-edge, edge, cy, cy + slab, sky, edge);
+  soup.box(-edge, edge, cy, cy + slab, -edge, -sky);
+  soup.box(sky, edge, cy, cy + slab, -sky, sky);
+  soup.box(-edge, -sky, cy, cy + slab, -sky, sky);
+  for (const at of [-2.6, 2.6]) {
+    soup.box(-5.4, 5.4, 8.48, 8.64, at - 0.06, at + 0.06);
+    soup.box(at - 0.06, at + 0.06, 8.48, 8.64, -5.4, 5.4);
+  }
+}
+
+function addChannels(cyan: Soup, magenta: Soup): void {
+  const y = GROUND_Y + 0.02;
+  const h = 0.035;
+  const lip = WELL_HALF + 0.18;
+  const outer = WELL_HALF + 0.4;
+  cyan.box(-outer, outer, y, y + h, lip, outer);
+  cyan.box(-outer, outer, y, y + h, -outer, -lip);
+  cyan.box(-outer, -lip, y, y + h, -lip, lip);
+  cyan.box(lip, outer, y, y + h, -lip, lip);
+
+  const under = CATWALK_Y - 0.22;
+  const band = 0.16;
+  magenta.box(-RING_INNER, RING_INNER, under, under + 0.07, CONCOURSE - band, CONCOURSE);
+  magenta.box(-RING_INNER, RING_INNER, under, under + 0.07, -CONCOURSE, -CONCOURSE + band);
+  magenta.box(CONCOURSE - band, CONCOURSE, under, under + 0.07, -CONCOURSE, CONCOURSE);
+  magenta.box(-CONCOURSE, -CONCOURSE + band, under, under + 0.07, -CONCOURSE, CONCOURSE);
+
+  const lane = CATWALK_Y + 0.025;
+  cyan.box(-10, 10, lane, lane + 0.03, 14.35, 14.52);
+  cyan.box(-10, 10, lane, lane + 0.03, -14.52, -14.35);
+  cyan.box(-14.52, -14.35, lane, lane + 0.03, -10, 10);
+  cyan.box(14.35, 14.52, lane, lane + 0.03, -10, 10);
+}
+
+function addBeacons(soup: Soup): void {
+  for (const pillar of ATRIUM_PILLARS) {
+    soup.box(pillar.x - 0.16, pillar.x + 0.16, pillar.top, pillar.top + 0.28, pillar.z - 0.16, pillar.z + 0.16);
+    soup.box(pillar.x - pillar.half - 0.02, pillar.x - pillar.half + 0.05, GROUND_Y + 0.4, pillar.top - 0.2, pillar.z - 0.08, pillar.z + 0.08);
+  }
+}
+
+function addPad(soup: Soup, pad: AtriumPad): void {
+  const y = pad.position.y + 0.025;
+  const { x, z } = pad.position;
+  if (pad.kind === "health") {
+    soup.box(x - 0.42, x + 0.42, y, y + 0.05, z - 0.12, z + 0.12);
+    soup.box(x - 0.12, x + 0.12, y, y + 0.05, z - 0.42, z + 0.42);
+    return;
+  }
+  if (pad.kind === "armor") {
+    soup.box(x - 0.46, x + 0.46, y, y + 0.05, z - 0.46, z - 0.3);
+    soup.box(x - 0.46, x + 0.46, y, y + 0.05, z + 0.3, z + 0.46);
+    soup.box(x - 0.46, x - 0.3, y, y + 0.05, z - 0.3, z + 0.3);
+    soup.box(x + 0.3, x + 0.46, y, y + 0.05, z - 0.3, z + 0.3);
+    return;
+  }
+  soup.box(x - 0.28, x + 0.28, y, y + 0.08, z - 0.18, z + 0.18);
+  soup.box(x - 0.12, x + 0.12, y + 0.08, y + 0.16, z - 0.1, z + 0.1);
+}
+
+function signMaterial(): MeshBasicMaterial | null {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.fillStyle = "#0A0B10";
+  context.fillRect(0, 0, 1024, 256);
+  context.strokeStyle = "#00E5FF";
+  context.lineWidth = 10;
+  context.strokeRect(16, 16, 992, 224);
+  context.fillStyle = "#00E5FF";
+  context.font = "600 78px sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText("ORION-VEC ATRIUM", 512, 100);
+  context.fillStyle = "#FF2E9F";
+  context.font = "600 46px sans-serif";
+  context.fillText("LEVEL 0", 512, 176);
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  const material = new MeshBasicMaterial({ map: texture, toneMapped: false });
+  material.name = "atrium-sign";
+  return material;
+}
+
+function addSigns(meshes: Mesh[], triangles: { count: number }): void {
+  const material = signMaterial();
+  if (!material) return;
+  const soup = new Soup();
+  const y = 7.15;
+  const w = 1.7;
+  const h = 0.42;
+  soup.face([-w, y + h, -12.15], [w, y + h, -12.15], [w, y - h, -12.15], [-w, y - h, -12.15], [0, 0, 1]);
+  soup.face([-w, y - h, 12.15], [w, y - h, 12.15], [w, y + h, 12.15], [-w, y + h, 12.15], [0, 0, -1]);
+  const mesh = new Mesh(soup.geometry(), material);
+  mesh.name = "atrium-sign";
+  meshes.push(mesh);
+  triangles.count += soup.triangles;
+}
+
+export interface AtriumView {
+  meshes: Mesh[];
+  triangles: number;
+}
+
+export function buildAtriumView(): AtriumView {
+  const concrete = new Soup();
+  addStructure(concrete);
+  const cyan = new Soup();
+  const magenta = new Soup();
+  addChannels(cyan, magenta);
+  const amber = new Soup();
+  addBeacons(amber);
+  const health = new Soup();
+  const armor = new Soup();
+  const ammo = new Soup();
+  for (const pad of ATRIUM_PADS) {
+    if (pad.kind === "health") addPad(health, pad);
+    else if (pad.kind === "armor") addPad(armor, pad);
+    else addPad(ammo, pad);
+  }
+
+  const meshes = [
+    concreteMesh(concrete),
+    glowMesh(cyan, CYAN, "atrium-cyan"),
+    glowMesh(magenta, MAGENTA, "atrium-magenta"),
+    glowMesh(amber, AMBER, "atrium-amber"),
+    glowMesh(health, ALERT, "atrium-health"),
+    glowMesh(armor, CYAN, "atrium-armor"),
+    glowMesh(ammo, ACID, "atrium-ammo"),
   ];
-  const geometry = new BufferGeometry();
-  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  geometry.computeVertexNormals();
-  return new Mesh(geometry, solidMaterial(0x5b8cff));
+  let triangles = concrete.triangles + cyan.triangles + magenta.triangles + amber.triangles;
+  triangles += health.triangles + armor.triangles + ammo.triangles;
+  const extra = { count: 0 };
+  addSigns(meshes, extra);
+  triangles += extra.count;
+  return { meshes, triangles };
 }
 
-function solidMaterial(color: number): MeshStandardMaterial {
-  return new MeshStandardMaterial({
-    color,
-    roughness: 0.58,
-    metalness: 0.04,
-    side: DoubleSide,
-  });
+export function addAtrium(scene: Scene): { triangles: number; meshes: number } {
+  const view = buildAtriumView();
+  for (const mesh of view.meshes) scene.add(mesh);
+  return { triangles: view.triangles, meshes: view.meshes.length };
 }
+
+export const ATRIUM_CLEAR = VOID;
+export const ATRIUM_FOG = 0x0c1016;

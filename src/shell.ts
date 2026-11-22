@@ -162,7 +162,10 @@ export function mountShell(canvas: HTMLCanvasElement): {
     onFrame(time: number, pose?: DebugPose): void {
       if (lastTime !== 0) {
         const delta = time - lastTime;
-        if (delta > 0 && delta < 1000) {
+        // A software-GL frame can run past a second. Still count it, so the
+        // readout moves instead of sticking on the placeholder. A background
+        // tab can sit for much longer than five seconds; that gap is not a frame.
+        if (delta > 0 && delta < 5000) {
           sampleMs += delta;
           sampleFrames += 1;
           if (sampleMs >= FPS_SAMPLE_MS) {
