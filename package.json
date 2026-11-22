@@ -13,7 +13,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --strictPort",
     "check": "node scripts/check-provenance.mjs",
-    "test": "node --test scripts/check-provenance.test.mjs",
+    "test": "node --test scripts/*.test.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {

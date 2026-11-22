@@ -7,7 +7,19 @@ type Phase = "warning" | "ready" | "playing" | "paused";
 
 const FPS_SAMPLE_MS = 250;
 
-export function mountShell(canvas: HTMLCanvasElement): { onFrame(time: number): void } {
+export interface DebugPose {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  sensitivity: number;
+}
+
+export function mountShell(canvas: HTMLCanvasElement): {
+  readonly phase: Phase;
+  onFrame(time: number, pose?: DebugPose): void;
+} {
   const root = required<HTMLElement>("#app-shell");
   const warning = required<HTMLElement>("#content-warning");
   const ready = required<HTMLElement>("#click-to-play");
@@ -21,6 +33,7 @@ export function mountShell(canvas: HTMLCanvasElement): { onFrame(time: number): 
   let lastTime = 0;
   let sampleMs = 0;
   let sampleFrames = 0;
+  let fpsLabel = "— fps";
 
   function setPhase(next: Phase): void {
     phase = next;
@@ -141,23 +154,32 @@ export function mountShell(canvas: HTMLCanvasElement): { onFrame(time: number): 
   setPhase("warning");
 
   return {
-    onFrame(time: number): void {
+    get phase() {
+      return phase;
+    },
+    onFrame(time: number, pose?: DebugPose): void {
       if (lastTime !== 0) {
         const delta = time - lastTime;
         if (delta > 0 && delta < 1000) {
           sampleMs += delta;
           sampleFrames += 1;
           if (sampleMs >= FPS_SAMPLE_MS) {
-            if (showFps) {
-              const value = Math.round((sampleFrames * 1000) / sampleMs);
-              fps.textContent = `${value} fps`;
-            }
+            fpsLabel = `${Math.round((sampleFrames * 1000) / sampleMs)} fps`;
             sampleMs = 0;
             sampleFrames = 0;
           }
         }
       }
       lastTime = time;
+      if (showFps) {
+        if (!pose) {
+          fps.textContent = fpsLabel;
+        } else {
+          const pos = `${pose.x.toFixed(2)} ${pose.y.toFixed(2)} ${pose.z.toFixed(2)}`;
+          const angles = `yaw ${pose.yaw.toFixed(1)}  pitch ${pose.pitch.toFixed(1)}`;
+          fps.textContent = `${fpsLabel}  pos ${pos}  ${angles}  sens ${pose.sensitivity.toFixed(2)}`;
+        }
+      }
     },
   };
 }
