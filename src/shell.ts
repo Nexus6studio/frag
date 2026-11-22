@@ -6,6 +6,23 @@
 type Phase = "warning" | "ready" | "playing" | "paused";
 
 const FPS_SAMPLE_MS = 250;
+/**
+ * Pointer lock has to survive this long before a later release counts as the
+ * player leaving. Headless Chromium can grant the lock from the click and drop
+ * it on the next beat; that used to flip play back to paused before the HUD
+ * observer's "play" mode was what the smoke test sampled.
+ */
+const LOCK_STABLE_MS = 1000;
+
+export function unlockShouldPause(input: {
+  phase: string;
+  requestOpen: boolean;
+  lockStable: boolean;
+}): boolean {
+  if (input.phase !== "playing") return false;
+  if (input.requestOpen) return false;
+  return input.lockStable;
+}
 
 export interface DebugPose {
   x: number;
@@ -32,6 +49,9 @@ export function mountShell(canvas: HTMLCanvasElement): {
   let phase: Phase = "warning";
   let showFps = false;
   let lockRequest = 0;
+  let lockEpoch = 0;
+  let lockStable = false;
+  let stableTimer = 0;
   let lastTime = 0;
   let sampleMs = 0;
   let sampleFrames = 0;
@@ -55,14 +75,20 @@ export function mountShell(canvas: HTMLCanvasElement): {
 
   function requestLock(): void {
     const request = ++lockRequest;
-    const finish = (): void => {
-      if (lockRequest === request) lockRequest = 0;
+    lockEpoch += 1;
+    lockStable = false;
+    // Clear the in-flight token on a later turn. A rejected or instantly
+    // dropped lock fires pointerlockchange after the promise, and zeroing the
+    // token in the promise itself made that event look like the player left.
+    const settle = (): void => {
+      setTimeout(() => {
+        if (lockRequest === request) lockRequest = 0;
+      }, 0);
     };
     try {
-      // Headless runs and dismissed prompts reject. Overlay state already moved.
-      void canvas.requestPointerLock().then(finish, finish);
+      void canvas.requestPointerLock().then(settle, settle);
     } catch {
-      finish();
+      settle();
     }
   }
 
@@ -136,9 +162,13 @@ export function mountShell(canvas: HTMLCanvasElement): {
   window.addEventListener("keydown", onKeyDown, true);
 
   document.addEventListener("pointerlockchange", () => {
-    const locked = document.pointerLockElement !== null;
+    const locked = document.pointerLockElement === canvas;
     if (locked) {
-      lockRequest = 0;
+      const epoch = ++lockEpoch;
+      window.clearTimeout(stableTimer);
+      stableTimer = window.setTimeout(() => {
+        if (epoch === lockEpoch && document.pointerLockElement === canvas) lockStable = true;
+      }, LOCK_STABLE_MS);
       // A lock during the warning would skip the acknowledge step. Drop it.
       if (phase === "warning") {
         document.exitPointerLock();
@@ -147,10 +177,13 @@ export function mountShell(canvas: HTMLCanvasElement): {
       if (phase === "ready" || phase === "paused") setPhase("playing");
       return;
     }
-    // Ignore the unlock from a lock that is still being requested, so a late
-    // release cannot bounce a resume straight back to pause.
-    if (lockRequest !== 0) return;
-    if (phase === "playing") setPhase("paused");
+    const requestOpen = lockRequest !== 0;
+    const wasStable = lockStable;
+    lockEpoch += 1;
+    lockStable = false;
+    window.clearTimeout(stableTimer);
+    if (requestOpen) lockRequest = 0;
+    if (unlockShouldPause({ phase, requestOpen, lockStable: wasStable })) setPhase("paused");
   });
 
   setPhase("warning");

@@ -214,14 +214,21 @@ async function assertShellFlow(page, errors) {
   }
 
   try {
+    // Poll from the test runner. The default rAF poll stalls behind a software-GL
+    // frame, so a HUD that is already in play mode can miss a 2s rAF budget.
     await page.waitForFunction(
       () => document.querySelector("#hud")?.getAttribute("data-mode") === "play",
       undefined,
-      { timeout: 2_000 },
+      { timeout: 2_000, polling: 50 },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`hud did not show during play: ${message}`);
+    const snap = await page.evaluate(() => ({
+      phase: document.querySelector("#app-shell")?.getAttribute("data-phase"),
+      mode: document.querySelector("#hud")?.getAttribute("data-mode"),
+      locked: document.pointerLockElement != null,
+    }));
+    errors.push(`hud did not show during play (${JSON.stringify(snap)}): ${message}`);
   }
   const readout = await page.evaluate(() => {
     const hp = document.querySelector("#hud-hp");
