@@ -9,6 +9,8 @@ import {
   Scene,
   WebGLRenderer,
 } from "three";
+import { mountHud } from "./hud/hud";
+import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
 
 const renderer = new WebGLRenderer({
@@ -20,6 +22,11 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 const shell = mountShell(renderer.domElement);
+const player = createPlayerState();
+mountHud(player);
+if (import.meta.env.DEV) {
+  exposePlayerDebug(window, player);
+}
 
 const scene = new Scene();
 scene.background = new Color(0x111118);

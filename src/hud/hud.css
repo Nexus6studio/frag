@@ -1,0 +1,142 @@
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  color: #f7f8ff;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  user-select: none;
+}
+
+#hud[data-mode="hidden"] {
+  display: none;
+}
+
+#hud[data-mode="dim"] {
+  opacity: 0.35;
+}
+
+#hud[data-mode="dead"] #crosshair,
+#hud[data-mode="dead"] #hud-bar {
+  visibility: hidden;
+}
+
+html[data-cursor="none"],
+html[data-cursor="none"] body,
+html[data-cursor="none"] canvas {
+  cursor: none;
+}
+
+#crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+}
+
+#crosshair span {
+  position: absolute;
+  background: #f7f8ff;
+  box-shadow: 0 0 0 1px #07080d;
+}
+
+.crosshair-n,
+.crosshair-s {
+  left: 50%;
+  width: 2px;
+  height: 8px;
+  transform: translateX(-50%);
+}
+
+.crosshair-n {
+  top: 0;
+}
+
+.crosshair-s {
+  bottom: 0;
+}
+
+.crosshair-e,
+.crosshair-w {
+  top: 50%;
+  width: 8px;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+.crosshair-w {
+  left: 0;
+}
+
+.crosshair-e {
+  right: 0;
+}
+
+#hud-bar {
+  position: absolute;
+  right: 24px;
+  bottom: 22px;
+  left: 24px;
+  display: flex;
+  align-items: flex-end;
+  gap: 36px;
+}
+
+.hud-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #f7f8ff;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-shadow:
+    1px 0 0 #07080d,
+    -1px 0 0 #07080d,
+    0 1px 0 #07080d,
+    0 -1px 0 #07080d;
+  text-transform: uppercase;
+}
+
+.hud-value {
+  display: block;
+  color: #f7f8ff;
+  font-size: 40px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-shadow:
+    1px 0 0 #07080d,
+    -1px 0 0 #07080d,
+    0 1px 0 #07080d,
+    0 -1px 0 #07080d;
+}
+
+#hud-ammo-stat {
+  margin-left: auto;
+}
+
+#death-recap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(10, 11, 16, 0.55);
+  color: #f7f8ff;
+  font: inherit;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+#death-recap[hidden] {
+  display: none;
+}
