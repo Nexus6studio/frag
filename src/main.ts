@@ -9,8 +9,10 @@ import {
   Scene,
   WebGLRenderer,
 } from "three";
+import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
 import { createLook } from "./look";
+import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
 
 const renderer = new WebGLRenderer({
@@ -23,6 +25,11 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 const shell = mountShell(renderer.domElement);
 const input = createInput(renderer.domElement);
+const player = createPlayerState();
+mountHud(player);
+if (import.meta.env.DEV) {
+  exposePlayerDebug(window, player);
+}
 
 const scene = new Scene();
 scene.background = new Color(0x111118);
