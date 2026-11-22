@@ -134,3 +134,19 @@ test("seeding look from an existing view does not move the camera until the mous
   assert.ok(before.distanceTo(after) < 1e-8);
   assert.ok(Math.abs(horizontalFov(camera.fov, camera.aspect) - 105) < 1e-6);
 });
+
+test("view punch offsets the camera without changing the held aim", () => {
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.rotation.order = "YXZ";
+  camera.lookAt(0, 0, -1);
+  const look = createLook(camera);
+  const yaw = look.yaw;
+  const pitch = look.pitch;
+  look.setViewPunch(0.12);
+  assert.equal(look.yaw, yaw);
+  assert.equal(look.pitch, pitch);
+  assert.ok(Math.abs(camera.rotation.x * RAD2DEG - (pitch + 0.12)) < 1e-6);
+  look.setViewPunch(0);
+  assert.ok(Math.abs(camera.rotation.x * RAD2DEG - pitch) < 1e-6);
+  assert.equal(look.pitch, pitch);
+});

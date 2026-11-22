@@ -85,6 +85,8 @@ export interface LookRig {
   apply(movementX: number, movementY: number): void;
   nudgeSensitivity(direction: -1 | 1): void;
   resize(width: number, height: number): void;
+  /** Add a transient pitch offset, in degrees, without changing the held aim. */
+  setViewPunch(pitchDeg: number): void;
   readonly yaw: number;
   readonly pitch: number;
   readonly sensitivity: number;
@@ -120,6 +122,11 @@ export function createLook(camera: PerspectiveCamera): LookRig {
     },
     nudgeSensitivity(direction: -1 | 1): void {
       sensitivity = stepSensitivity(sensitivity, direction);
+    },
+    setViewPunch(pitchDeg: number): void {
+      camera.rotation.x = clampPitch(pitch + pitchDeg) * DEG2RAD;
+      camera.rotation.y = yaw * DEG2RAD;
+      camera.rotation.z = 0;
     },
     resize(width: number, height: number): void {
       const aspect = Math.max(width, 1) / Math.max(height, 1);
