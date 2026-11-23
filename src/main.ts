@@ -15,7 +15,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
-import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium } from "./floor.ts";
+import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium, syncPadViews } from "./floor.ts";
 import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
 import { createLook } from "./look";
@@ -30,6 +30,7 @@ import {
 } from "./move";
 import { aimDirection, createQuill, muzzleOrigin } from "./quill.ts";
 import { mountQuillView } from "./quill-view.ts";
+import { applyDamage, createPickupSim, exposeDamageDebug } from "./pickups.ts";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
 
@@ -57,7 +58,7 @@ let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
 const scene = new Scene();
 scene.background = new Color(ATRIUM_CLEAR);
 scene.fog = new FogExp2(ATRIUM_FOG, 0.015);
-addAtrium(scene);
+const atrium = addAtrium(scene);
 scene.add(new HemisphereLight(0x8ea4bc, 0x1a120c, 0.55));
 const sheen = new DirectionalLight(0xd5e4f2, 0.85);
 sheen.position.set(-6, 14, 8);
@@ -70,6 +71,7 @@ camera.rotation.order = "YXZ";
 camera.lookAt(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z - 1);
 const look = createLook(camera);
 const quill = createQuill({ hull, player });
+const pickups = createPickupSim(quill);
 const debugTarget = import.meta.env.DEV
   ? {
       center: {
@@ -114,6 +116,11 @@ Object.defineProperty(renderer.domElement, "fragStats", {
 if (import.meta.env.DEV) {
   exposePlayerDebug(window, player);
   exposeMoveDebug(window, () => mover.state);
+  exposeDamageDebug(window, (damage) => {
+    const current = player.get();
+    const next = applyDamage(damage, current.hp, current.armor);
+    player.set({ hp: next.hp, armor: next.armor });
+  });
 }
 
 function resize(): void {
@@ -146,8 +153,10 @@ function frame(time: number): void {
     if (needsRespawn(mover.state.position)) {
       mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
     }
+    pickups.step(simDt, mover.state.position, player);
   }
   const body = mover.state;
+  syncPadViews(atrium.pads, pickups.pads);
   camera.position.set(body.position.x, body.position.y + EYE_HEIGHT, body.position.z);
   if (captured) {
     aimDirection(look.yaw, look.pitch, aim);

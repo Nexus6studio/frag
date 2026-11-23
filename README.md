@@ -59,6 +59,12 @@ On the ground, forward, back, and strafe share an 8 m/s wish. Acceleration towar
 
 The prototype weapon is a magnetic flechette carbine. Holding the left mouse fires one rail-spike every 0.125 s, with no spread. Each flechette is a projectile: it travels at 70 m/s, is about 0.35 m long with a 0.06 m radius, and despawns after 1 s or 70 m. A hit deals 9 damage with no falloff. The magazine holds 40 and the reserve starts at 40, capped at 80. Reserve never goes negative. Reload takes 1.4 s, from R or automatically when the magazine is empty and rounds remain, and the trigger does nothing during that reload. Pulling the trigger with an empty magazine and an empty reserve does not fire and does not cycle. Each shot adds a 0.12° upward view punch that settles before the next shot if aim is held. The viewmodel, the cyan-magenta muzzle flash, the flechettes, and the tracers are procedural geometry. There is no audio.
 
+## Pickups and damage
+
+Two health pads and three ammo pads sit on the atrium landmarks. The body collects one by walking the capsule into its trigger. A collected pad stays in place and goes dark until its timer elapses, then it can be taken again. Health adds 25 and stops at 100, and returns after 20 s. Ammo adds 40 flechettes to the Quill Driver reserve and does not top up the magazine. Reserve stops at 80, so 40 in the magazine and 70 in reserve becomes 40+80, and the pad returns after 15 s. A pad that cannot add anything, because health is already 100 or the reserve is already 80, stays lit. The health pad is an acid-green canister with a cross. The ammo pad is a magenta crate. Both are procedural geometry.
+
+The two armor landmarks stay in the map data. `ARMOR_ENABLED` is false, so those pads are not drawn and cannot be collected. The armor number on the HUD stays hidden. Armor absorption is already in the damage rule for the drone: for damage D and armor A, armor takes min(A, floor(D·2/3)) and the rest comes off HP. A hit that would remove less than 1 HP still removes 1. In this release armor is 0, so the whole hit lands on HP. HP at 0 is the click-to-restart recap.
+
 ## Field of view
 
 The horizontal field of view is 105°. three.js `PerspectiveCamera.fov` is the vertical field of view, so Frag derives the vertical angle from 105° and the viewport aspect ratio (`width / height`) and writes that into `camera.fov` on load and on resize:
