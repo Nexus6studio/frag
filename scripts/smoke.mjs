@@ -636,8 +636,20 @@ async function runDevSmoke(browser, errors) {
       errors.push(`dev unexpected network request: ${url}`);
     });
     await waitForPort(20_000, devPort, devOrigin);
-    await page.goto(`${devOrigin}/`, { waitUntil: "load", timeout: 20_000 });
-    await page.waitForSelector("canvas", { timeout: 5_000 });
+    await page.goto(`${devOrigin}/`, { waitUntil: "load", timeout: 30_000 });
+    try {
+      // The first dev request compiles three.js. A cold runner needs longer than the static preview.
+      await page.waitForSelector("canvas", { timeout: 45_000 });
+    } catch (error) {
+      const snap = await page
+        .evaluate(() => ({
+          ready: document.readyState,
+          text: (document.body?.innerText ?? "").slice(0, 300),
+        }))
+        .catch(() => ({ ready: "unavailable", text: "" }));
+      errors.push(`dev canvas missing (${JSON.stringify(snap)})`);
+      throw error;
+    }
     const storedOnLoad = await page.evaluate(() => Object.keys(localStorage));
     if (storedOnLoad.length > 0) {
       errors.push(`dev localStorage was not empty on load: ${storedOnLoad.join(", ")}`);
