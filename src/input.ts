@@ -173,6 +173,8 @@ export function createInput(
   sample(captured: boolean): InputState;
   /** Drop latched clicks. Death and restart call this; pause drops them too. */
   discard(): void;
+  /** Drop pointer-lock deltas so a restart does not apply the look that killed you. */
+  clearLook(): void;
 } {
   const held = new Set<string>();
   let fire = false;
@@ -268,6 +270,10 @@ export function createInput(
   document.addEventListener("pointerlockchange", onLockChange);
 
   return {
+    clearLook(): void {
+      lookX = 0;
+      lookY = 0;
+    },
     sample(captured: boolean): InputState {
       const dx = lookX;
       const dy = lookY;

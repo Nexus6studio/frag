@@ -79,6 +79,8 @@ export function applyMouseLook(
 export interface LookView {
   readonly verticalFov: number;
   readonly aspect: number;
+  readonly yaw: number;
+  readonly pitch: number;
 }
 
 export interface LookRig {
@@ -87,6 +89,8 @@ export interface LookRig {
   resize(width: number, height: number): void;
   /** Add a transient pitch offset, in degrees, without changing the held aim. */
   setViewPunch(pitchDeg: number): void;
+  /** Spawn facing: yaw 0, pitch 0, looking toward -Z. Sensitivity is kept. */
+  reset(): void;
   readonly yaw: number;
   readonly pitch: number;
   readonly sensitivity: number;
@@ -128,6 +132,11 @@ export function createLook(camera: PerspectiveCamera): LookRig {
       camera.rotation.y = yaw * DEG2RAD;
       camera.rotation.z = 0;
     },
+    reset(): void {
+      yaw = 0;
+      pitch = 0;
+      write();
+    },
     resize(width: number, height: number): void {
       const aspect = Math.max(width, 1) / Math.max(height, 1);
       camera.aspect = aspect;
@@ -149,6 +158,12 @@ export function createLook(camera: PerspectiveCamera): LookRig {
       },
       get aspect() {
         return camera.aspect;
+      },
+      get yaw() {
+        return yaw;
+      },
+      get pitch() {
+        return pitch;
       },
     },
   };

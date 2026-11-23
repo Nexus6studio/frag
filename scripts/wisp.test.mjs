@@ -491,6 +491,59 @@ test("a 5 fps bolt step stops on every atrium hull", () => {
   assert.equal(ramps, hull.ramps.length);
 });
 
+test("a single bolt applies damage once at 5, 30, and 120 fps", () => {
+  for (const dt of [1 / 120, 1 / 30, 0.2]) {
+    const open = {
+      boxes: [{ min: { x: -40, y: -1, z: -40 }, max: { x: 40, y: 0, z: 40 } }],
+      ramps: [],
+    };
+    const player = createPlayerState({ hp: 500 });
+    const sim = createWispSim({
+      hull: open,
+      player,
+      hitboxes: createHitboxWorld(),
+      origin: { x: 0, y: 0, z: 0 },
+    });
+    const feet = { x: 0, y: 0, z: 0 };
+    const bySerial = new Map();
+    let previousHp = player.get().hp;
+    let previous = new Set();
+    let t = 0;
+    while (t < 6) {
+      sim.update(dt, feet);
+      t += dt;
+      const hp = player.get().hp;
+      const live = new Set(sim.bolts.filter((bolt) => bolt.alive).map((bolt) => bolt.serial));
+      if (hp !== previousHp) {
+        const events = (previousHp - hp) / WISP_BOLT_DAMAGE;
+        const died = [...previous].filter((serial) => !live.has(serial));
+        assert.equal(
+          events,
+          died.length,
+          `${dt} s step dealt ${previousHp - hp} HP from ${died.length} bolts`,
+        );
+        for (const serial of died) {
+          bySerial.set(serial, (bySerial.get(serial) ?? 0) + 1);
+          assert.equal(bySerial.get(serial), 1, `bolt ${serial} damaged twice at dt ${dt}`);
+        }
+        previousHp = hp;
+      }
+      for (const bolt of sim.bolts) {
+        if (!bolt.alive || !bolt.hit) continue;
+        assert.fail(`bolt ${bolt.serial} stayed alive after it had already hit`);
+      }
+      previous = live;
+    }
+    const shot = sim.snapshot();
+    assert.ok(bySerial.size >= 1, `no bolt hit at dt ${dt}`);
+    assert.equal(shot.hits, bySerial.size);
+    assert.equal(shot.damageEvents, bySerial.size);
+    assert.equal(500 - player.get().hp, bySerial.size * WISP_BOLT_DAMAGE);
+    assert.ok(shot.firstBolt >= WISP_SPAWN_GRACE, `first bolt ${shot.firstBolt} at dt ${dt}`);
+    console.log(`bolt-once dt ${dt}: ${bySerial.size} bolts once each, hp ${player.get().hp}`);
+  }
+});
+
 test("a near bolt is culled and a far bolt stays at the 0.25 m scale", () => {
   assert.equal(boltVisualScale(0.4), 0);
   assert.equal(boltVisualScale(0.99), 0);
