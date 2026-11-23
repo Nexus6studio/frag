@@ -33,6 +33,30 @@ export function recapAcceptsInput(elapsedSeconds: number): boolean {
   return Number.isFinite(elapsedSeconds) && elapsedSeconds >= RECAP_ARM_SECONDS - 1e-6;
 }
 
+/**
+ * What Enter should do to the recap.
+ * `ignore` leaves the key alone. `swallow` is the lockout: the player is dead,
+ * the recap is up, and the press must not restart. `restart` is a real confirm.
+ * A pause resume is `ignore` even when HP is already 0. Esc and the killing
+ * blow can land in one turn, and that Enter is the pause overlay, not the recap.
+ */
+export function recapEnterAction(input: {
+  code: string;
+  repeat: boolean;
+  pauseResume: boolean;
+  hp: number;
+  phase: string | null;
+  armed: boolean;
+}): "ignore" | "swallow" | "restart" {
+  if (input.code !== "Enter" || input.repeat) return "ignore";
+  if (input.pauseResume) return "ignore";
+  if (!(input.hp <= 0)) return "ignore";
+  // Paused, or still on the way there: the shell owns this Enter.
+  if (input.phase !== "playing") return "ignore";
+  if (!input.armed) return "swallow";
+  return "restart";
+}
+
 /** A death click restarts only from the live recap. Pause and a blur do not. */
 export function acceptRestartClick(input: {
   mode: string | null;

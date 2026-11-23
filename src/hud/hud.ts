@@ -1,7 +1,8 @@
 import "./hud.css";
 import type { PlayerStore } from "../player/state";
 import type { DeathRecap } from "../waves.ts";
-import { acceptRestartClick, bindHud, deathRecapText, recapAcceptsInput, type HudElements } from "./model";
+import { acceptRestartClick, bindHud, deathRecapText, recapAcceptsInput, recapEnterAction, type HudElements } from "./model";
+import { isPauseResume } from "../shell";
 
 export function mountHud(
   player: PlayerStore,
@@ -151,9 +152,16 @@ export function mountHud(
   window.addEventListener(
     "keydown",
     (event) => {
-      if (event.code !== "Enter" || event.repeat) return;
-      if (root.dataset.mode !== "dead") return;
-      if (!armed()) {
+      const action = recapEnterAction({
+        code: event.code,
+        repeat: event.repeat,
+        pauseResume: isPauseResume(event),
+        hp: player.get().hp,
+        phase: shell?.getAttribute("data-phase") ?? null,
+        armed: armed(),
+      });
+      if (action === "ignore") return;
+      if (action === "swallow") {
         event.preventDefault();
         event.stopPropagation();
         return;

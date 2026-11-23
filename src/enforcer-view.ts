@@ -173,19 +173,21 @@ export function mountEnforcerView(scene: Scene, sim: EnforcerSim): { sync(): voi
       show(tracers, flashes);
 
       const sparkCount = packPoints(sparkPositions, sim.sparks);
-      sparkGeom.getAttribute("position").needsUpdate = true;
       sparkGeom.setDrawRange(0, sparkCount);
       sparkPoints.visible = sparkCount > 0;
+      if (sparkCount > 0) sparkGeom.getAttribute("position").needsUpdate = true;
 
       const bloodCount = packPoints(bloodPositions, sim.spray);
-      bloodGeom.getAttribute("position").needsUpdate = true;
       bloodGeom.setDrawRange(0, bloodCount);
       bloodPoints.visible = bloodCount > 0;
+      if (bloodCount > 0) bloodGeom.getAttribute("position").needsUpdate = true;
 
-      show(gibs, packGibs(gibs, sim.gibs));
-      if (gibs.instanceColor) gibs.instanceColor.needsUpdate = true;
-      show(decals, packDecals(decals, sim.decals));
-      if (decals.instanceColor) decals.instanceColor.needsUpdate = true;
+      const gibCount = packGibs(gibs, sim.gibs);
+      show(gibs, gibCount);
+      if (gibCount > 0 && gibs.instanceColor) gibs.instanceColor.needsUpdate = true;
+      const decalCount = packDecals(decals, sim.decals);
+      show(decals, decalCount);
+      if (decalCount > 0 && decals.instanceColor) decals.instanceColor.needsUpdate = true;
     },
   };
 }

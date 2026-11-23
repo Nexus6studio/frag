@@ -40,6 +40,9 @@ test("the shipped bundle warns about blood and keeps drone gore mechanical", { t
     assert.ok(js.includes(String(color)), `drone color ${color.toString(16)} missing from the bundle`);
   }
   assert.doesNotMatch(js, /dismember|corpse|intestine/);
+  assert.doesNotMatch(js, /__fragPlayer|__fragMove|__fragDamage|__fragRun/);
+  assert.doesNotMatch(js, /exposePlayerDebug|exposeMoveDebug|exposeDamageDebug|exposeRunDebug/);
+  assert.doesNotMatch(js, /god-?mode|wave-?skip|skipWave|quill-debug-target/i);
 });
 
 function readsAsBlood(hex) {

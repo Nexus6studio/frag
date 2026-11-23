@@ -270,6 +270,8 @@ document.querySelector("#context-lost-reload")?.addEventListener("click", () => 
 
 let lastTime = 0;
 let lastSimDt = 0;
+let wallMs = 0;
+let simCpuMs = 0;
 let simSeconds = 0;
 let simFrames = 0;
 let dropClock = false;
@@ -289,6 +291,8 @@ Object.defineProperty(renderer.domElement, "fragSim", {
       sim: simSeconds,
       frames: simFrames,
       frameDt: lastSimDt,
+      wallMs,
+      simCpuMs,
       shots: quill.shotsFired,
       firstShot: quill.shotsFired > 0 ? quill.shotTime(0) : null,
       lastShot: quill.shotsFired > 0 ? quill.shotTime(quill.shotsFired - 1) : null,
@@ -332,10 +336,12 @@ function frame(time: number): void {
   const drop = dropClock || document.visibilityState === "hidden";
   dropClock = false;
   const gapMs = lastTime > 0 ? time - lastTime : 0;
+  wallMs = gapMs;
   lastSimDt = clampedFrameSeconds(lastTime, time, drop);
   if (!drop && gapMs > MAX_FRAME_SECONDS * 1000) latchedStall = lastSimDt;
   lastTime = time;
   const simDt = lastSimDt;
+  const simStart = performance.now();
   const playing = shell.phase === "playing";
   const pointerLocked = document.pointerLockElement === renderer.domElement;
   // The sim clock follows play, not the pointer. Pause, the warning, and
@@ -393,6 +399,8 @@ function frame(time: number): void {
     planarSpeed: planarSpeedOf(body.velocity),
     grounded: body.grounded,
   });
+  // Sim, combat, and view sync. The bloom render below is not included.
+  simCpuMs = performance.now() - simStart;
   if (!contextLost) {
     renderer.info.reset();
     composer.render(simDt);
