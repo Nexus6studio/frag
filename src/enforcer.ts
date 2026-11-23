@@ -7,8 +7,9 @@
 // well, up a ramp or a stair, along the catwalk, never across a parapet.
 //
 // The stun-blaster is a short hitscan cone. The atrium hull is tested first,
-// so a round stops on a wall. Death is a collapse and a spark pool. Nothing
-// here is a person, and nothing here is gore.
+// so a round stops on a wall. Death is a collapse, a spark pool, and a blood
+// spray with gibs and surface decals. The hound is a fictional unit. The
+// player, the pads, and the props do not gib.
 
 import {
   ATRIUM_RAMPS,
@@ -33,6 +34,7 @@ import {
   type MoveState,
   type Vec3,
 } from "./move.ts";
+import { createBloodGore, type GoreDecal, type GorePart } from "./gore.ts";
 import { applyDamage } from "./pickups.ts";
 import { damagePlayer } from "./player/hurt.ts";
 import type { PlayerStore } from "./player/state.ts";
@@ -63,7 +65,7 @@ const CONE_COS = Math.cos((14 * Math.PI) / 180);
 const SHOT_RECORD = 32;
 const HURT_SLOTS = 8;
 const SPARKS_PER_DEATH = 8;
-const FLASH_LIFE = 0.08;
+const FLASH_LIFE = 0.12;
 
 export interface EnforcerSpark {
   alive: boolean;
@@ -119,6 +121,10 @@ export interface EnforcerSim {
   readonly units: readonly EnforcerUnit[];
   readonly sparks: readonly EnforcerSpark[];
   readonly flashes: readonly EnforcerFlash[];
+  readonly spray: readonly GorePart[];
+  readonly gibs: readonly GorePart[];
+  readonly decals: readonly GoreDecal[];
+  readonly goreBursts: number;
   readonly time: number;
   update(dt: number, feet: Vec3): void;
   aliveCount(): number;
@@ -216,6 +222,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
   }
   const sparks = makeSparks(ENFORCER_SPARK_CAP);
   const flashes = makeFlashes(ENFORCER_FLASH_CAP);
+  const gore = createBloodGore();
   const shotTimes = new Float64Array(SHOT_RECORD);
   let time = 0;
   let shots = 0;
@@ -241,6 +248,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     unit.sidestep = 0;
     unit.handle.setActive(false);
     burst(unit.position);
+    gore.burst(unit.position, hull);
     director?.noteFrag();
     if (aliveCount() === 0) options.onCleared?.();
   }
@@ -257,6 +265,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     for (let i = 0; i < units.length; i += 1) deactivate(units[i]!);
     for (let i = 0; i < sparks.length; i += 1) sparks[i]!.alive = false;
     for (let i = 0; i < flashes.length; i += 1) flashes[i]!.alive = false;
+    gore.reset();
     for (let i = 0; i < wanted; i += 1) activate(units[i]!, points[i]!, feet, graceTime);
   }
 
@@ -309,6 +318,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     }
     stepSparks(sparks, dt);
     stepFlashes(flashes, dt);
+    gore.step(dt);
   }
 
   function tryFire(unit: Unit, feet: Vec3, world: Hull): boolean {
@@ -402,6 +412,12 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     units,
     sparks,
     flashes,
+    spray: gore.spray,
+    gibs: gore.gibs,
+    decals: gore.decals,
+    get goreBursts() {
+      return gore.bursts;
+    },
     get time() {
       return time;
     },

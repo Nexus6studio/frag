@@ -103,7 +103,7 @@ async function visibleText(page, selector) {
 
 const WARNING_TITLE = "Content warning";
 const WARNING_BODY =
-  "Contains fast-paced combat against robotic enemies, with explosions, sparks and debris. Includes flashing lights and rapid motion.";
+  "Contains fast-paced combat against fictional enemies, with blood, gibs, explosions, sparks and debris. Includes flashing lights and rapid motion.";
 
 function expectedBuildId() {
   const env = process.env.GITHUB_SHA?.trim() ?? "";

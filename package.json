@@ -13,7 +13,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --strictPort",
     "check": "node scripts/check-provenance.mjs",
-    "test": "node --experimental-strip-types --test scripts/check-provenance.test.mjs scripts/build.test.mjs scripts/hud.test.mjs scripts/input.test.mjs scripts/look.test.mjs scripts/move.test.mjs scripts/shell.test.mjs scripts/atrium.test.mjs scripts/quill.test.mjs scripts/pickups.test.mjs scripts/wisp.test.mjs scripts/enforcer.test.mjs scripts/waves.test.mjs scripts/soak.test.mjs scripts/bundle-blood.test.mjs",
+    "test": "node --experimental-strip-types --test scripts/check-provenance.test.mjs scripts/build.test.mjs scripts/hud.test.mjs scripts/input.test.mjs scripts/look.test.mjs scripts/move.test.mjs scripts/shell.test.mjs scripts/atrium.test.mjs scripts/quill.test.mjs scripts/pickups.test.mjs scripts/wisp.test.mjs scripts/enforcer.test.mjs scripts/gore.test.mjs scripts/waves.test.mjs scripts/soak.test.mjs scripts/bundle-blood.test.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {

@@ -39,6 +39,7 @@ import {
   ENFORCER_SPARK_CAP,
   enforcerInsideVolume,
 } from "../src/enforcer.ts";
+import { GORE_DECAL_CAP, GORE_GIB_CAP, GORE_SPRAY_CAP } from "../src/gore.ts";
 import { mountEnforcerView } from "../src/enforcer-view.ts";
 import { DRONE_CAP, ENFORCER_CAP } from "../src/waves.ts";
 
@@ -117,6 +118,12 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     assert.equal(player.get().hp, 100, `${reason} restart hp`);
     assert.equal(wisps.wave, 1, `${reason} restart wave`);
     assert.equal(quill.poolSize, QUILL_POOL_CAP, `${reason} flechette pool grew`);
+    assert.ok(enforcers.spray.every((slot) => slot.alive === false), `${reason} blood spray survived restart`);
+    assert.ok(enforcers.gibs.every((slot) => slot.alive === false), `${reason} blood gibs survived restart`);
+    assert.ok(enforcers.decals.every((slot) => slot.alive === false), `${reason} blood decals survived restart`);
+    assert.ok(wisps.sparks.every((slot) => slot.alive === false), `${reason} drone sparks survived restart`);
+    assert.ok(wisps.gibs.every((slot) => slot.alive === false), `${reason} drone gibs survived restart`);
+    assert.ok(wisps.fluid.every((slot) => slot.alive === false), `${reason} drone fluid survived restart`);
   }
 
   function finite(value, label) {
@@ -201,6 +208,12 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     assert.equal(enforcers.units.length, ENFORCER_CAP);
     assert.equal(enforcers.sparks.length, ENFORCER_SPARK_CAP);
     assert.equal(enforcers.flashes.length, ENFORCER_FLASH_CAP);
+    assert.equal(enforcers.spray.length, GORE_SPRAY_CAP);
+    assert.equal(enforcers.gibs.length, GORE_GIB_CAP);
+    assert.equal(enforcers.decals.length, GORE_DECAL_CAP);
+    assert.ok(aliveCount(enforcers.spray) <= GORE_SPRAY_CAP);
+    assert.ok(aliveCount(enforcers.gibs) <= GORE_GIB_CAP);
+    assert.ok(aliveCount(enforcers.decals) <= GORE_DECAL_CAP);
     assert.ok(wisps.aliveCount() <= DRONE_CAP);
     assert.ok(enforcers.aliveCount() <= ENFORCER_CAP);
     assert.ok(wisps.aliveCount() + enforcers.aliveCount() <= DRONE_CAP + ENFORCER_CAP);
@@ -249,6 +262,9 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     assertPoolInside(enforcers.sparks, "enforcer spark");
     assertPoolInside(wisps.gibs, "gib");
     assertPoolInside(wisps.fluid, "fluid");
+    assertPoolInside(enforcers.spray, "blood spray");
+    assertPoolInside(enforcers.gibs, "blood gib");
+    assertDecalsInside(enforcers.decals);
 
     const vitals = player.get();
     finite(vitals.hp, "hp");
@@ -289,8 +305,9 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   assert.ok(maxDrones >= 2 && maxDrones <= DRONE_CAP, `drone count ${maxDrones}`);
   assert.ok(maxEnforcers >= 1 && maxEnforcers <= ENFORCER_CAP, `enforcer count ${maxEnforcers}`);
   assert.ok(baseline, "no memory sample");
+  assert.ok(enforcers.goreBursts >= 2, `gore bursts ${enforcers.goreBursts}`);
   console.log(
-    `soak ${SOAK_SECONDS}s restarts ${restarts} maxWave ${maxWave} maxDrones ${maxDrones} maxEnforcers ${maxEnforcers} geometries ${baseline.geometries} textures ${baseline.textures} sceneChildren ${baseline.children} nodes ${baseline.nodes} samples ${samples.length}`,
+    `soak ${SOAK_SECONDS}s restarts ${restarts} maxWave ${maxWave} maxDrones ${maxDrones} maxEnforcers ${maxEnforcers} goreBursts ${enforcers.goreBursts} geometries ${baseline.geometries} textures ${baseline.textures} sceneChildren ${baseline.children} nodes ${baseline.nodes} samples ${samples.length}`,
   );
 });
 
@@ -376,6 +393,30 @@ function yawToward(from, pad) {
   const dx = pad.x - from.x;
   const dz = pad.z - from.z;
   return (Math.atan2(-dx, -dz) * 180) / Math.PI;
+}
+
+function aliveCount(pool) {
+  let count = 0;
+  for (let i = 0; i < pool.length; i += 1) if (pool[i].alive) count += 1;
+  return count;
+}
+
+function assertDecalsInside(pool) {
+  for (let i = 0; i < pool.length; i += 1) {
+    const slot = pool[i];
+    if (!slot.alive) continue;
+    assert.equal(Number.isFinite(slot.x) && Number.isFinite(slot.y) && Number.isFinite(slot.z), true, "decal");
+    assert.equal(Number.isFinite(slot.nx) && Number.isFinite(slot.ny) && Number.isFinite(slot.nz), true, "decal normal");
+    const len = Math.hypot(slot.nx, slot.ny, slot.nz);
+    assert.ok(len > 0.9 && len < 1.1, `decal normal ${len}`);
+    const inside =
+      Math.abs(slot.x) <= MAP_HALF + 0.2 &&
+      Math.abs(slot.z) <= MAP_HALF + 0.2 &&
+      slot.y >= KILL_Y &&
+      slot.y <= CEILING_Y;
+    assert.equal(inside, true, `decal escaped ${slot.x} ${slot.y} ${slot.z}`);
+    assert.ok(slot.age >= 0 && slot.age <= slot.life + 1e-4, `decal age ${slot.age}`);
+  }
 }
 
 function assertPoolInside(pool, label) {
