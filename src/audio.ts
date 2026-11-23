@@ -2,14 +2,23 @@
 //
 // The context is created on the first gesture (Continue, click-to-play, or M).
 // A missing, suspended, or throwing AudioContext stays silent and does not log.
-// Mute is a master gain held in memory. One-shots share a cap; the heartbeat
-// is a single voice that stops when HP leaves the low band, including death.
+// Mute is a master gain held in memory. One-shots share a cap of eight.
+// Oscillator fundamentals stay at or under 900 Hz, and tones pass a soft lowpass,
+// so the short squares are not up in the ear's sensitive 2–5 kHz band.
+// The low-HP heartbeat is a lub-dub of lowpassed noise. It stops when HP leaves
+// the low band, including death, and the beats stay 0.75 s apart.
 
 import { cuePitch, heartbeatWanted, type CueId } from "./cues.ts";
 
 const MAX_VOICES = 8;
 const HEART_GAP = 0.75;
 const MASTER = 0.8;
+// Under the 2–5 kHz range where the old squares and sweeps sat. Harmonics of a
+// square still exist, so the tone path also closes above this.
+const TONE_CEILING = 900;
+const TONE_LOWPASS = 1200;
+// A murmur heard through the body, inside the 150–200 Hz window.
+const HEART_LOWPASS = 160;
 
 interface Param {
   value: number;
@@ -95,63 +104,63 @@ interface Live {
 const RECIPES: Record<CueId, Recipe> = {
   flechette: {
     dur: 0.05,
-    tones: [{ type: "square", from: 1760, to: 520, dur: 0.045, gain: 0.12, at: 0 }],
-    noise: [{ dur: 0.03, gain: 0.08, freq: 1800, at: 0 }],
+    tones: [{ type: "square", from: 640, to: 260, dur: 0.045, gain: 0.12, at: 0 }],
+    noise: [{ dur: 0.03, gain: 0.08, freq: 400, at: 0 }],
   },
   dry: {
     dur: 0.016,
-    tones: [{ type: "square", from: 2093, to: 1600, dur: 0.012, gain: 0.05, at: 0 }],
+    tones: [{ type: "square", from: 520, to: 390, dur: 0.012, gain: 0.05, at: 0 }],
     noise: [],
   },
   "reload-slide": {
     dur: 0.09,
     tones: [],
-    noise: [{ dur: 0.08, gain: 0.12, freq: 900, at: 0 }],
+    noise: [{ dur: 0.08, gain: 0.12, freq: 360, at: 0 }],
   },
   "reload-lock": {
     dur: 0.05,
-    tones: [{ type: "triangle", from: 180, to: 90, dur: 0.04, gain: 0.16, at: 0 }],
-    noise: [{ dur: 0.018, gain: 0.1, freq: 2400, at: 0 }],
+    tones: [{ type: "triangle", from: 160, to: 80, dur: 0.04, gain: 0.16, at: 0 }],
+    noise: [{ dur: 0.018, gain: 0.1, freq: 280, at: 0 }],
   },
   hit: {
     dur: 0.02,
-    tones: [{ type: "square", from: cuePitch("hit") ?? 3100, to: cuePitch("hit") ?? 3100, dur: 0.018, gain: 0.07, at: 0 }],
+    tones: [{ type: "square", from: cuePitch("hit") ?? 840, to: cuePitch("hit") ?? 840, dur: 0.018, gain: 0.07, at: 0 }],
     noise: [],
   },
   kill: {
     dur: 0.26,
     tones: [
-      { type: "sine", from: cuePitch("kill") ?? 740, to: cuePitch("kill") ?? 740, dur: 0.14, gain: 0.12, at: 0 },
-      { type: "sine", from: 1174, to: 1174, dur: 0.16, gain: 0.1, at: 0.09 },
+      { type: "sine", from: cuePitch("kill") ?? 466, to: cuePitch("kill") ?? 466, dur: 0.14, gain: 0.12, at: 0 },
+      { type: "sine", from: 740, to: 740, dur: 0.16, gain: 0.1, at: 0.09 },
     ],
     noise: [],
   },
   wisp: {
     dur: 0.08,
-    tones: [{ type: "sawtooth", from: 380, to: 2400, dur: 0.07, gain: 0.07, at: 0 }],
+    tones: [{ type: "sawtooth", from: 280, to: 860, dur: 0.07, gain: 0.07, at: 0 }],
     noise: [],
   },
   enforcer: {
     dur: 0.06,
-    tones: [{ type: "sine", from: 110, to: 55, dur: 0.05, gain: 0.18, at: 0 }],
-    noise: [{ dur: 0.04, gain: 0.14, freq: 420, at: 0 }],
+    tones: [{ type: "sine", from: 90, to: 45, dur: 0.05, gain: 0.18, at: 0 }],
+    noise: [{ dur: 0.04, gain: 0.14, freq: 150, at: 0 }],
   },
-  health: chirp(cuePitch("health") ?? 523.25),
-  armor: chirp(cuePitch("armor") ?? 659.25),
-  ammo: chirp(cuePitch("ammo") ?? 880),
+  health: chirp(cuePitch("health") ?? 349.23),
+  armor: chirp(cuePitch("armor") ?? 440),
+  ammo: chirp(cuePitch("ammo") ?? 523.25),
   hurt: {
     dur: 0.1,
-    tones: [{ type: "sine", from: 96, to: 48, dur: 0.09, gain: 0.22, at: 0 }],
-    noise: [{ dur: 0.04, gain: 0.06, freq: 200, at: 0 }],
+    tones: [{ type: "sine", from: 78, to: 40, dur: 0.09, gain: 0.22, at: 0 }],
+    noise: [{ dur: 0.04, gain: 0.06, freq: 130, at: 0 }],
   },
-  // Rising sweep. The jump pad calls this once per launch.
+  // Rising sweep, an octave under the old whoosh. The jump pad calls this once per launch.
   whoosh: {
     dur: 0.34,
     tones: [
-      { type: "sawtooth", from: 180, to: 720, dur: 0.28, gain: 0.07, at: 0 },
-      { type: "sine", from: 360, to: 1280, dur: 0.32, gain: 0.09, at: 0.02 },
+      { type: "sawtooth", from: 130, to: 460, dur: 0.28, gain: 0.07, at: 0 },
+      { type: "sine", from: 220, to: 680, dur: 0.32, gain: 0.09, at: 0.02 },
     ],
-    noise: [{ dur: 0.18, gain: 0.05, freq: 1400, at: 0 }],
+    noise: [{ dur: 0.18, gain: 0.05, freq: 320, at: 0 }],
   },
 };
 
@@ -161,6 +170,17 @@ function chirp(root: number): Recipe {
     tones: [{ type: "sine", from: root, to: root * 1.5, dur: 0.09, gain: 0.12, at: 0 }],
     noise: [],
   };
+}
+
+for (const recipe of Object.values(RECIPES)) {
+  for (const tone of recipe.tones) {
+    if (tone.from > TONE_CEILING || tone.to > TONE_CEILING) {
+      throw new Error(`cue above ${TONE_CEILING} Hz`);
+    }
+  }
+  for (const burst of recipe.noise) {
+    if (burst.freq > TONE_CEILING) throw new Error(`cue above ${TONE_CEILING} Hz`);
+  }
 }
 
 function hostCtor(host: AudioHost | undefined): (new () => AudioCtx) | null {
@@ -179,7 +199,9 @@ function at(param: Param, value: number, time: number): void {
 }
 
 function ramp(param: Param, value: number, time: number): void {
-  const safe = Math.max(1, value);
+  // Exponential ramps reject a target of 0. A floor of 1 turned every decay
+  // into a swell to unity, and the stop() after it clicked at full scale.
+  const safe = value > 0 ? value : 0.001;
   if (param.exponentialRampToValueAtTime) param.exponentialRampToValueAtTime(safe, time);
   else if (param.linearRampToValueAtTime) param.linearRampToValueAtTime(safe, time);
   else param.value = safe;
@@ -227,7 +249,9 @@ export function createAudio(host?: AudioHost): {
     if (!ctx) return null;
     if (noise) return noise;
     const rate = ctx.sampleRate > 0 ? ctx.sampleRate : 44100;
-    const buffer = ctx.createBuffer(1, 4096, rate);
+    // Long enough for the whoosh noise (0.18 s) and a murmur pulse. A 4096-frame
+    // buffer is under 0.1 s at 44.1 kHz, so those voices used to cut off mid-envelope.
+    const buffer = ctx.createBuffer(1, Math.ceil(rate * 0.5), rate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
     noise = buffer;
@@ -261,9 +285,10 @@ export function createAudio(host?: AudioHost): {
     const filter = ctx.createBiquadFilter();
     osc.type = spec.type;
     filter.type = "lowpass";
-    filter.frequency.value = 4200;
-    filter.Q.value = 0.7;
+    filter.frequency.value = TONE_LOWPASS;
+    filter.Q.value = 0.5;
     const start = now + spec.at;
+    at(filter.frequency, TONE_LOWPASS, start);
     at(osc.frequency, spec.from, start);
     if (spec.to !== spec.from) ramp(osc.frequency, spec.to, start + spec.dur);
     at(gain.gain, spec.gain, start);
@@ -290,6 +315,7 @@ export function createAudio(host?: AudioHost): {
     filter.frequency.value = spec.freq;
     filter.Q.value = 0.8;
     const start = now + spec.at;
+    at(filter.frequency, spec.freq, start);
     at(gain.gain, spec.gain, start);
     ramp(gain.gain, 0.001, start + spec.dur);
     source.connect(filter);
@@ -338,29 +364,56 @@ export function createAudio(host?: AudioHost): {
     if (stop) stop();
   }
 
-  function thump(): void {
+  // Lub then dub. White noise into a fixed lowpass has no pitch and no sweep.
+  // The old voice was a 58 Hz sine, so it read as a beep. Its lowpass opened
+  // from 90 Hz to 200 Hz, and the shared gain ramp swelled to 1, so stop()
+  // cut the wave at full scale. That step is the click. The player-hurt sting
+  // is a separate falling tone and does not play inside this voice.
+  const MURMUR = [
+    { at: 0.02, attack: 0.05, dur: 0.16, gain: 2 },
+    { at: 0.18, attack: 0.04, dur: 0.12, gain: 1.05 },
+  ] as const;
+
+  function pulse(spec: (typeof MURMUR)[number], now: number): () => void {
+    if (!ctx || !master) return () => {};
+    const buffer = noiseBuffer();
+    if (!buffer) return () => {};
+    const source = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    source.buffer = buffer;
+    filter.type = "lowpass";
+    filter.Q.value = 0.5;
+    filter.frequency.value = HEART_LOWPASS;
+    const start = now + spec.at;
+    at(filter.frequency, HEART_LOWPASS, start);
+    // Most of the noise is above the cutoff, so the peak sits above 1 to leave
+    // a soft thump. It still starts at silence and is gone before stop().
+    gain.gain.value = 0;
+    at(gain.gain, 0.0008, start);
+    const peakAt = start + spec.attack;
+    if (gain.gain.linearRampToValueAtTime) gain.gain.linearRampToValueAtTime(spec.gain, peakAt);
+    else at(gain.gain, spec.gain, peakAt);
+    ramp(gain.gain, 0.001, start + spec.dur);
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(master);
+    source.start(start);
+    source.stop(start + spec.dur + 0.03);
+    const stop = stopper([source, filter, gain], () => source.stop());
+    source.onended = stop;
+    return stop;
+  }
+
+  function murmur(): void {
     if (!ctx || !master) return;
     stopHeart();
     const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-    osc.type = "sine";
-    osc.frequency.value = 58;
-    filter.type = "lowpass";
-    at(filter.frequency, 90, now);
-    if (filter.frequency.linearRampToValueAtTime) filter.frequency.linearRampToValueAtTime(200, now + 0.08);
-    filter.Q.value = 0.6;
-    at(gain.gain, 0.1, now);
-    ramp(gain.gain, 0.001, now + 0.1);
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(master);
-    osc.start(now);
-    osc.stop(now + 0.12);
-    const stop = stopper([osc, filter, gain], () => osc.stop());
-    osc.onended = stop;
-    heartStop = stop;
+    const stops: Array<() => void> = [];
+    heartStop = () => {
+      for (const stop of stops) stop();
+    };
+    for (const spec of MURMUR) stops.push(pulse(spec, now));
   }
 
   return {
@@ -389,7 +442,7 @@ export function createAudio(host?: AudioHost): {
       try {
         if (ctx.currentTime + 1e-4 < nextBeat) return;
         nextBeat = ctx.currentTime + HEART_GAP;
-        thump();
+        murmur();
       } catch {
         stopHeart();
       }
