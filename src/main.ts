@@ -17,6 +17,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { ATRIUM_PADS, ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
 import { createAudio } from "./audio.ts";
 import { cueFor, hurtFromVitals, type SimEvent } from "./cues.ts";
+import { createCombatFeedback, strafeOf, stepWalkPhase, viewmodelOffset } from "./feel.ts";
 import { restartCombat } from "./combat.ts";
 import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium, syncPadViews } from "./floor.ts";
 import { createFight } from "./fight.ts";
@@ -38,6 +39,7 @@ import {
 import { aimDirection, createQuill, muzzleOrigin } from "./quill.ts";
 import { mountQuillView } from "./quill-view.ts";
 import { applyDamage, createPickupSim, exposeDamageDebug } from "./pickups.ts";
+import { subscribePlayerHurt } from "./player/hurt.ts";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
 import { exposeRunDebug } from "./wisp.ts";
@@ -64,12 +66,15 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 const audio = createAudio();
+const feedback = createCombatFeedback();
 let showMute = (muted: boolean): void => {
   muteShown = muted;
 };
 let muteShown = false;
 const hear = (event: SimEvent): void => {
   audio.play(cueFor(event));
+  if (event.type === "enemy-hit") feedback.noteHit(false);
+  else if (event.type === "enemy-kill") feedback.noteHit(true);
 };
 const shell = mountShell(renderer.domElement, {
   onGesture() {
@@ -118,6 +123,9 @@ camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z)
 camera.rotation.order = "YXZ";
 camera.lookAt(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z - 1);
 const look = createLook(camera);
+subscribePlayerHurt((source) => {
+  feedback.noteDamage(look.yaw, camera.position, source);
+});
 const quill = createQuill({ hull, player, onEvent: hear });
 const pickups = createPickupSim(quill, ATRIUM_PADS, hear);
 const debugTarget = import.meta.env.DEV
@@ -137,10 +145,14 @@ const enforcers = fight.enforcers;
 const wispView = mountWispView(scene, wisps, camera);
 const enforcerView = mountEnforcerView(scene, enforcers);
 
+let walkPhase = 0;
+
 function restartRun(): void {
   // The click that leaves the recap is not a shot on the next frame.
   audio.prime();
   audio.cut();
+  feedback.reset();
+  walkPhase = 0;
   input.discard();
   restartCombat({
     player,
@@ -196,6 +208,13 @@ Object.defineProperty(renderer.domElement, "fragStats", {
       geometries: memory.geometries,
       textures: memory.textures,
     };
+  },
+});
+Object.defineProperty(renderer.domElement, "fragFeedback", {
+  configurable: true,
+  enumerable: false,
+  get() {
+    return feedback.sample();
   },
 });
 Object.defineProperty(renderer.domElement, "fragDrones", {
@@ -351,6 +370,12 @@ function frame(time: number): void {
     simFrames += 1;
   }
   const living = player.get().hp > 0;
+  // Age the previous flash before this frame's hits, so a long frame cannot
+  // eat a marker before it is drawn.
+  if (playing) {
+    fight.tickFlash(simDt);
+    feedback.step(simDt);
+  }
   // Dead, including the recap's first second, drops a click so it cannot fire
   // after the restart. Pause takes the same path through sample(false).
   if (!living) input.discard();
@@ -384,7 +409,18 @@ function frame(time: number): void {
     enforcers.update(simDt, body.position);
   }
   hud.setWave(wisps.wave);
+  hud.setCombat(feedback.sample());
+  const speed = planarSpeedOf(body.velocity);
+  if (playing && living) walkPhase = stepWalkPhase(walkPhase, simDt, speed);
   look.setViewPunch(quill.punchDeg);
+  quillView.setPose(
+    viewmodelOffset({
+      kick: quill.kick,
+      strafe: strafeOf(look.yaw, body.velocity),
+      planarSpeed: speed,
+      walkPhase,
+    }),
+  );
   quillView.setDebugVisible(shell.debug);
   quillView.sync();
   wispView.sync();

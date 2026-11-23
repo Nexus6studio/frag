@@ -1,4 +1,5 @@
 import "./hud.css";
+import { ARC_CAP, type FeedbackSample } from "../feel.ts";
 import type { PlayerStore } from "../player/state";
 import type { DeathRecap } from "../waves.ts";
 import { acceptRestartClick, bindHud, deathRecapText, recapAcceptsInput, recapEnterAction, type HudElements } from "./model";
@@ -12,7 +13,7 @@ export function mountHud(
     /** One window mousedown already exists for fire. Death tracking uses that. */
     trackPointer?: (down: () => void, up: () => void) => void;
   },
-): { setWave(wave: number): void; setMuted(muted: boolean): void } {
+): { setWave(wave: number): void; setMuted(muted: boolean): void; setCombat(sample: FeedbackSample): void } {
   const root = document.createElement("div");
   root.id = "hud";
   root.dataset.mode = "hidden";
@@ -24,6 +25,25 @@ export function mountHud(
     const tick = document.createElement("span");
     tick.className = `crosshair-${side}`;
     crosshair.appendChild(tick);
+  }
+
+  const marker = document.createElement("div");
+  marker.id = "hitmarker";
+  marker.dataset.kind = "none";
+  marker.hidden = true;
+  marker.setAttribute("aria-hidden", "true");
+  marker.append(document.createElement("span"), document.createElement("span"));
+
+  const arcs = document.createElement("div");
+  arcs.id = "damage-arcs";
+  arcs.setAttribute("aria-hidden", "true");
+  const arcEls: HTMLDivElement[] = [];
+  for (let i = 0; i < ARC_CAP; i += 1) {
+    const arc = document.createElement("div");
+    arc.className = "damage-arc";
+    arc.hidden = true;
+    arcs.append(arc);
+    arcEls.push(arc);
   }
 
   const bar = document.createElement("div");
@@ -54,7 +74,7 @@ export function mountHud(
   mute.hidden = true;
   mute.textContent = "MUTE";
 
-  root.append(crosshair, waveEl, bar, mute, death);
+  root.append(crosshair, marker, arcs, waveEl, bar, mute, death);
 
   const els: HudElements = {
     root,
@@ -180,6 +200,25 @@ export function mountHud(
     },
     setMuted(muted: boolean): void {
       mute.hidden = !muted;
+    },
+    setCombat(sample: FeedbackSample): void {
+      const flash = sample.marker;
+      marker.dataset.kind = flash.kind;
+      marker.hidden = flash.kind === "none";
+      marker.style.opacity = flash.opacity.toFixed(3);
+      for (let i = 0; i < arcEls.length; i += 1) {
+        const el = arcEls[i]!;
+        const arc = sample.arcs[i];
+        if (!arc || arc.opacity <= 0.01) {
+          el.hidden = true;
+          continue;
+        }
+        el.hidden = false;
+        el.style.left = `${(arc.x * 100).toFixed(2)}%`;
+        el.style.top = `${(arc.y * 100).toFixed(2)}%`;
+        el.style.opacity = arc.opacity.toFixed(3);
+        el.style.transform = `translate(-50%, -50%) rotate(${arc.rotation.toFixed(4)}rad)`;
+      }
     },
   };
 }

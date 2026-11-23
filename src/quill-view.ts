@@ -43,6 +43,14 @@ const REST_X = 0.2;
 const REST_Y = -0.22;
 const REST_Z = -0.38;
 
+export interface QuillPose {
+  x: number;
+  y: number;
+  z: number;
+  pitch: number;
+  roll: number;
+}
+
 const _quat = new Quaternion();
 const _matrix = new Matrix4();
 const _pos = new Vector3();
@@ -53,7 +61,7 @@ export function mountQuillView(
   camera: PerspectiveCamera,
   driver: QuillDriver,
   debugTarget: QuillDebugTarget | null,
-): { sync(): void; setDebugVisible(visible: boolean): void } {
+): { sync(): void; setDebugVisible(visible: boolean): void; setPose(pose: QuillPose): void } {
   const anchor = new Group();
   anchor.name = "quill-driver";
   anchor.position.set(REST_X, REST_Y, REST_Z);
@@ -91,6 +99,7 @@ export function mountQuillView(
   let dummy: Mesh | null = null;
   let dummyHandle: HitboxHandle | null = null;
   let debugVisible = false;
+  let pose: QuillPose = { x: REST_X, y: REST_Y, z: REST_Z, pitch: 0, roll: 0 };
   // Production builds drop this. The target is not part of the shipped scene.
   if (import.meta.env?.DEV && debugTarget) {
     dummy = new Mesh(
@@ -114,10 +123,14 @@ export function mountQuillView(
       debugVisible = visible;
       dummyHandle?.setActive(visible);
     },
+    setPose(next: QuillPose): void {
+      pose = next;
+    },
     sync(): void {
-      const kick = driver.kick;
-      anchor.position.set(REST_X, REST_Y - kick * 0.008, REST_Z + kick * 0.03);
-      anchor.rotation.x = kick * 0.045;
+      anchor.position.set(pose.x, pose.y, pose.z);
+      anchor.rotation.x = pose.pitch;
+      anchor.rotation.y = 0;
+      anchor.rotation.z = pose.roll;
       const flashing = driver.flash > 0.02;
       flash.visible = flashing;
       if (flashing) {

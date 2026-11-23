@@ -824,6 +824,8 @@ async function assertShellFlow(page, errors) {
     const ammoStat = document.querySelector("#hud-ammo-stat");
     const crosshair = document.querySelector("#crosshair");
     const tick = document.querySelector("#crosshair span");
+    const marker = document.querySelector("#hitmarker");
+    const arcNodes = document.querySelectorAll("#damage-arcs .damage-arc");
     const death = document.querySelector("#death-recap");
     const bar = document.querySelector("#hud-bar");
     const canvas = document.querySelector("canvas");
@@ -836,6 +838,8 @@ async function assertShellFlow(page, errors) {
       !(ammoStat instanceof HTMLElement) ||
       !(crosshair instanceof HTMLElement) ||
       !(tick instanceof HTMLElement) ||
+      !(marker instanceof HTMLElement) ||
+      arcNodes.length !== 3 ||
       !(death instanceof HTMLElement) ||
       !(bar instanceof HTMLElement)
     ) {
@@ -866,6 +870,9 @@ async function assertShellFlow(page, errors) {
       crossDx: Math.abs(box.left + box.width / 2 - window.innerWidth / 2),
       crossDy: Math.abs(box.top + box.height / 2 - window.innerHeight / 2),
       crossShown: shown(crosshair),
+      markerKind: marker.getAttribute("data-kind"),
+      markerHidden: marker.hidden,
+      arcCount: arcNodes.length,
       tickBackground: tickStyle.backgroundColor,
       tickShadow: tickStyle.boxShadow,
       deathHidden: death.hidden,
@@ -894,6 +901,11 @@ async function assertShellFlow(page, errors) {
       errors.push("armor slot is missing from the hud layout");
     }
     if (!readout.crossShown) errors.push("crosshair hidden during play");
+    if (readout.markerKind !== "none" || readout.markerHidden !== true || readout.arcCount !== 3) {
+      errors.push(
+        `hit feedback markup marker ${readout.markerKind} hidden ${readout.markerHidden} arcs ${readout.arcCount}`,
+      );
+    }
     if (readout.crossDx > 2 || readout.crossDy > 2) {
       errors.push(`crosshair off center by ${readout.crossDx}px, ${readout.crossDy}px`);
     }
@@ -1884,6 +1896,23 @@ async function assertStationaryDamage(browser, errors) {
     if (!(loss <= cadence * 10 + 1e-6)) {
       errors.push(`HP loss ${loss} exceeded the cadence maximum ${(cadence * 10).toFixed(2)}`);
     }
+    const feedback = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      return canvas instanceof HTMLCanvasElement ? canvas.fragFeedback : null;
+    });
+    if (!feedback) {
+      errors.push("fragFeedback missing");
+    } else {
+      console.log(
+        `damage arcs noted ${feedback.damageNoted}, last bearing ${feedback.lastBearing}, hits ${feedback.hitsNoted}`,
+      );
+      if (!(feedback.damageNoted >= 8)) {
+        errors.push(`directional damage noted ${feedback.damageNoted}, expected at least the 8 bolt hits`);
+      }
+      if (typeof feedback.lastBearing !== "number" || !Number.isFinite(feedback.lastBearing)) {
+        errors.push(`last damage bearing was ${feedback.lastBearing}`);
+      }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`stationary damage probe failed: ${message}`);
@@ -2246,7 +2275,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / 0 armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> M mutes -> damage -> pause -> resume -> reload, readable type at 480p, 720p, 1280x800, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, no console warnings, no ReadPixels stall, no third-party requests, localStorage empty`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / 0 armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> M mutes -> damage arcs -> pause -> resume -> reload, readable type at 480p, 720p, 1280x800, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, hitmarker mounted, no console warnings, no ReadPixels stall, no third-party requests, localStorage empty`,
       );
     }
   } finally {

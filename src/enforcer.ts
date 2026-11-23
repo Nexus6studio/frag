@@ -35,6 +35,7 @@ import {
   type Vec3,
 } from "./move.ts";
 import type { CueListener } from "./cues.ts";
+import { HIT_FLASH_SECONDS } from "./feel.ts";
 import { createBloodGore, type GoreDecal, type GorePart } from "./gore.ts";
 import { applyDamage } from "./pickups.ts";
 import { damagePlayer } from "./player/hurt.ts";
@@ -106,6 +107,8 @@ export interface EnforcerUnit {
   sidestep: number;
   /** Seconds of spawn grace left. */
   grace: number;
+  /** Seconds of white-cyan hit flash still left. */
+  hitFlash: number;
   /** Collapse timer. Negative hides a corpse; 0 starts the fall. */
   down: number;
 }
@@ -130,6 +133,8 @@ export interface EnforcerSim {
   update(dt: number, feet: Vec3): void;
   aliveCount(): number;
   hurt(index: number, amount: number): void;
+  /** Age the hit flash. Safe to call when the rest of the sim is paused. */
+  tickFlash(dt: number): void;
   killAlive(): void;
   spawnCount(count: number, feet: Vec3): void;
   place(index: number, feet: Vec3): void;
@@ -240,6 +245,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     const next = applyDamage(amount, unit.hp, unit.armor);
     unit.hp = next.hp;
     unit.armor = next.armor;
+    unit.hitFlash = HIT_FLASH_SECONDS;
     rememberHurt(unit, amount, time);
     if (unit.hp > 0) {
       options.onEvent?.({ type: "enemy-hit" });
@@ -353,7 +359,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     if (blocked && blocked.distance < dist - 0.35) return false;
     const armorBefore = player.get().armor;
     const hpBefore = player.get().hp;
-    damagePlayer(player, ENFORCER_DAMAGE);
+    damagePlayer(player, ENFORCER_DAMAGE, shotFrom);
     const changed = player.get().hp !== hpBefore || player.get().armor !== armorBefore;
     if (!changed) return false;
     if (shots < SHOT_RECORD) shotTimes[shots] = time;
@@ -439,6 +445,15 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
       const unit = units[index];
       if (!unit) return;
       applyHit(unit, amount);
+    },
+    tickFlash(dt: number): void {
+      if (!(dt > 0)) return;
+      for (let i = 0; i < units.length; i += 1) {
+        const unit = units[i]!;
+        if (!(unit.hitFlash > 0)) continue;
+        unit.hitFlash -= dt;
+        if (unit.hitFlash < 0) unit.hitFlash = 0;
+      }
     },
     killAlive(): void {
       for (let i = 0; i < units.length; i += 1) {
@@ -912,6 +927,7 @@ function makeUnit(
     yaw: 0,
     sidestep: 0,
     grace: 0,
+    hitFlash: 0,
     down: -1,
     body,
     chest,
@@ -954,6 +970,7 @@ function activate(unit: Unit, point: Vec3, face: Vec3, grace: number): void {
   unit.body.grounded = true;
   unit.body.timeOnGround = 1;
   unit.grace = grace;
+  unit.hitFlash = 0;
   unit.sidestep = 0;
   unit.side = 1;
   unit.cooldown = 0;
@@ -980,6 +997,7 @@ function deactivate(unit: Unit): void {
   unit.alive = false;
   unit.hp = 0;
   unit.armor = 0;
+  unit.hitFlash = 0;
   unit.down = -1;
   unit.sidestep = 0;
   unit.handle.setActive(false);

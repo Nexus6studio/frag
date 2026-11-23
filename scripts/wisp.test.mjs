@@ -37,6 +37,7 @@ import {
 import { DRONE_CAP } from "../src/waves.ts";
 import { traceSegment } from "../src/trace.ts";
 import { boltVisualScale } from "../src/wisp-view.ts";
+import { HIT_FLASH_SECONDS } from "../src/feel.ts";
 
 const DT = 1 / 120;
 
@@ -542,6 +543,23 @@ test("a single bolt applies damage once at 5, 30, and 120 fps", () => {
     assert.ok(shot.firstBolt >= WISP_SPAWN_GRACE, `first bolt ${shot.firstBolt} at dt ${dt}`);
     console.log(`bolt-once dt ${dt}: ${bySerial.size} bolts once each, hp ${player.get().hp}`);
   }
+});
+
+test("a flechette lights a 60 ms hit flash, including the shot that kills", () => {
+  const { sim } = atriumSim();
+  const drone = sim.drones.find((unit) => unit.alive);
+  assert.ok(drone, "no living drone");
+  assert.equal(drone.hitFlash, 0);
+  sim.hurt(drone.index, 9);
+  assert.equal(drone.alive, true);
+  assert.equal(drone.hitFlash, HIT_FLASH_SECONDS);
+  sim.tickFlash(HIT_FLASH_SECONDS);
+  assert.equal(drone.hitFlash, 0);
+  sim.hurt(drone.index, WISP_HP);
+  assert.equal(drone.alive, false);
+  assert.equal(drone.hitFlash, HIT_FLASH_SECONDS);
+  sim.tickFlash(0.02);
+  assert.ok(Math.abs(drone.hitFlash - (HIT_FLASH_SECONDS - 0.02)) < 1e-9);
 });
 
 test("a near bolt is culled and a far bolt stays at the 0.25 m scale", () => {
