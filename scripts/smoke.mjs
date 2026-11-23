@@ -107,6 +107,35 @@ function horizontalFov(verticalDeg, aspect) {
   return (2 * Math.atan(Math.tan(vertical / 2) * aspect) * 180) / Math.PI;
 }
 
+async function readDrones(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement) || canvas.fragDrones == null) {
+      return { error: "fragDrones missing" };
+    }
+    return canvas.fragDrones;
+  });
+}
+
+async function assertDrones(page, errors, label) {
+  const drones = await readDrones(page);
+  if (drones.error) {
+    errors.push(`${label}: ${drones.error}`);
+    return;
+  }
+  if (drones.count !== 2 || drones.drones?.length !== 2) {
+    errors.push(`${label}: expected 2 WISP-4 drones, saw ${drones.count}`);
+    return;
+  }
+  for (const drone of drones.drones) {
+    if (!drone.alive) errors.push(`${label}: a WISP-4 is already dead`);
+    if (!drone.aggro) errors.push(`${label}: a WISP-4 is not aggro`);
+    if (![drone.x, drone.y, drone.z].every((value) => Number.isFinite(value))) {
+      errors.push(`${label}: a WISP-4 has a non-finite position`);
+    }
+  }
+}
+
 async function readView(page) {
   return page.evaluate(() => {
     const canvas = document.querySelector("canvas");
@@ -254,6 +283,8 @@ async function assertQuillFire(page, errors) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`reload did not refill the magazine (now ${await ammoText()}): ${message}`);
   }
+  const drones = await readDrones(page);
+  if (drones.error) errors.push(drones.error);
   if (stats && !stats.error) {
     if (!(stats.calls > 0 && stats.calls <= 80)) {
       errors.push(`renderer draw calls during fire ${stats.calls} outside 1..80`);
@@ -262,7 +293,7 @@ async function assertQuillFire(page, errors) {
       errors.push(`renderer triangles during fire ${stats.triangles} outside 1..50000`);
     }
     console.log(
-      `renderer.info during fire: calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}`,
+      `renderer.info during fire: calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, drones ${drones.count ?? "?"}, live bolts ${drones.bolts ?? "?"}`,
     );
   } else if (stats?.error) {
     errors.push(stats.error);
@@ -399,6 +430,7 @@ async function assertShellFlow(page, errors) {
   if (readout.error) errors.push(readout.error);
   else {
     if (readout.hp !== "100" || !readout.hpShown) errors.push(`hp readout is ${readout.hp}`);
+    await assertDrones(page, errors, "at play start");
     if (readout.ammo !== "40+40" || !readout.ammoShown) errors.push(`ammo readout is ${readout.ammo}`);
     if (readout.armorText !== "0") errors.push(`armor value is ${readout.armorText}`);
     if (readout.armorVisibility !== "hidden") {
@@ -532,7 +564,12 @@ async function assertShellFlow(page, errors) {
   if (await page.locator("#pause").evaluate((el) => !el.hidden)) {
     errors.push("pause overlay still visible after resume");
   }
-  if ((await hudMode(page)) !== "play") errors.push("hud did not return after resume");
+  const resumedHud = await hudMode(page);
+  // A WISP-4 bolt can drop the player during the readout. Death is the
+  // click-to-restart recap; pause still returns to that or to play.
+  if (resumedHud !== "play" && resumedHud !== "dead") {
+    errors.push(`hud did not return after resume (${resumedHud ?? "missing"})`);
+  }
 
   const stored = await page.evaluate(() => Object.keys(localStorage));
   if (stored.length > 0) errors.push(`localStorage was written: ${stored.join(", ")}`);
@@ -583,6 +620,7 @@ try {
 
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 15_000 });
     await page.waitForSelector("canvas", { timeout: 5_000 });
+    await assertDrones(page, errors, "at load");
     const storedOnLoad = await page.evaluate(() => Object.keys(localStorage));
     if (storedOnLoad.length > 0) {
       errors.push(`localStorage was not empty on load: ${storedOnLoad.join(", ")}`);

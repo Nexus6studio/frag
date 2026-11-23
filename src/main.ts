@@ -16,6 +16,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
 import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium, syncPadViews } from "./floor.ts";
+import { playerHitboxes } from "./hitbox.ts";
 import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
 import { createLook } from "./look";
@@ -33,6 +34,8 @@ import { mountQuillView } from "./quill-view.ts";
 import { applyDamage, createPickupSim, exposeDamageDebug } from "./pickups.ts";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
+import { createWispSim } from "./wisp.ts";
+import { mountWispView } from "./wisp-view.ts";
 
 const renderer = new WebGLRenderer({
   antialias: true,
@@ -83,6 +86,8 @@ const debugTarget = import.meta.env.DEV
     }
   : null;
 const quillView = mountQuillView(scene, camera, quill, debugTarget);
+const wisps = createWispSim({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN });
+const wispView = mountWispView(scene, wisps);
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
 const quillCommand = { fire: false, reload: false, origin: muzzle, direction: aim };
@@ -110,6 +115,13 @@ Object.defineProperty(renderer.domElement, "fragStats", {
       lines: render.lines,
       points: render.points,
     };
+  },
+});
+Object.defineProperty(renderer.domElement, "fragDrones", {
+  configurable: true,
+  enumerable: false,
+  get() {
+    return wisps.snapshot();
   },
 });
 
@@ -164,10 +176,12 @@ function frame(time: number): void {
     quillCommand.fire = controls.down.fire;
     quillCommand.reload = controls.pressed.reload;
     quill.update(simDt, quillCommand);
+    wisps.update(simDt, body.position);
   }
   look.setViewPunch(quill.punchDeg);
   quillView.setDebugVisible(shell.debug);
   quillView.sync();
+  wispView.sync();
   shell.onFrame(time, {
     x: camera.position.x,
     y: camera.position.y,
