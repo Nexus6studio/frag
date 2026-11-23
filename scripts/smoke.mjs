@@ -1,5 +1,4 @@
 import { execFileSync, spawn } from "node:child_process";
-import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -1721,12 +1720,9 @@ try {
       }
     }
 
-    const shotDir = path.join(root, "test-results");
-    fs.mkdirSync(shotDir, { recursive: true });
-    const shot = path.join(shotDir, "atrium-smoke.png");
-    await page.screenshot({ path: shot });
-    const artifacts = "/opt/cursor/artifacts";
-    if (fs.existsSync(artifacts)) fs.copyFileSync(shot, path.join(artifacts, "atrium-smoke.png"));
+    // No page.screenshot here. On software GL the bloom frame occupies the
+    // compositor, and Playwright's capture waits for that frame until it times out.
+    // The pixels are already checked by the canvas sample above.
 
     await page.setViewportSize({ width: 900, height: 700 });
     await page.evaluate(
