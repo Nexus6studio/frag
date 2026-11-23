@@ -51,7 +51,7 @@ export type PadKind = "health" | "armor" | "ammo";
 
 export interface AtriumPad {
   kind: PadKind;
-  /** Feet-level position. Pads are visuals; they are not hulls. */
+  /** Feet-level position. Pads are not hulls; pickups.ts tests the capsule against a trigger. */
   position: Vec3;
 }
 
