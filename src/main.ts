@@ -201,6 +201,8 @@ document.querySelector("#context-lost-reload")?.addEventListener("click", () => 
 
 let lastTime = 0;
 let lastSimDt = 0;
+let simSeconds = 0;
+let simFrames = 0;
 let dropClock = false;
 
 document.addEventListener("visibilitychange", () => {
@@ -208,6 +210,21 @@ document.addEventListener("visibilitychange", () => {
   dropClock = true;
 });
 
+Object.defineProperty(renderer.domElement, "fragSim", {
+  configurable: true,
+  enumerable: false,
+  get() {
+    return {
+      sim: simSeconds,
+      frames: simFrames,
+      frameDt: lastSimDt,
+      shots: quill.shotsFired,
+      mag: quill.mag,
+      reserve: quill.reserve,
+      reloading: quill.reloading,
+    };
+  },
+});
 Object.defineProperty(renderer.domElement, "fragPose", {
   configurable: true,
   enumerable: false,
@@ -233,6 +250,8 @@ function frame(time: number): void {
   lastSimDt = clampedFrameSeconds(lastTime, time, drop);
   lastTime = time;
   const simDt = lastSimDt;
+  simSeconds += simDt;
+  simFrames += 1;
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
   const controls = input.sample(captured);

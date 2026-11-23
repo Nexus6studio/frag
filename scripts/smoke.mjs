@@ -1120,6 +1120,125 @@ async function runDevSmoke(browser, errors) {
   }
 }
 
+function installFireProbe(page) {
+  return page.addInitScript(() => {
+    const names = [];
+    const orig = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+      if (type === "mousedown" || type === "mouseup") {
+        const id = this === window ? "window" : this === document ? "document" : this.id || this.tagName || "node";
+        names.push(`${id}:${type}:${listener.name || "anon"}`);
+      }
+      return orig.call(this, type, listener, options);
+    };
+    window.__fireListenerNames = names;
+    const native = window.requestAnimationFrame.bind(window);
+    let last = 0;
+    window.requestAnimationFrame = (callback) =>
+      native((time) => {
+        if (last !== 0 && time - last < 200) {
+          window.requestAnimationFrame(callback);
+          return;
+        }
+        last = time;
+        callback(time);
+      });
+  });
+}
+
+async function readFire(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+    const names = window.__fireListenerNames ?? [];
+    return {
+      ammo: document.querySelector("#hud-ammo")?.textContent ?? "",
+      sim: sim?.sim ?? null,
+      shots: sim?.shots ?? null,
+      frames: sim?.frames ?? null,
+      wall: performance.now(),
+      mouseDown: names.filter((name) => name.startsWith("window:mousedown:")).length,
+      mouseDownNames: names.filter((name) => name.startsWith("window:mousedown:")),
+    };
+  });
+}
+
+async function assertThrottledFire(browser, errors) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  page.on("pageerror", (error) => {
+    errors.push(`fire probe pageerror: ${error.message}`);
+  });
+  try {
+    await installFireProbe(page);
+    await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector("canvas", { timeout: 10_000 });
+    await page.locator("#content-warning-continue").click();
+    await page.locator("#click-to-play").click();
+    await page.waitForFunction(
+      () => document.querySelector("#hud")?.getAttribute("data-mode") === "play" && document.pointerLockElement != null,
+      undefined,
+      { timeout: 8_000, polling: 50 },
+    );
+    const before = await readFire(page);
+    await page.mouse.move(640, 400);
+    await page.mouse.down();
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    await page.mouse.up();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const after = await readFire(page);
+    const wall = (after.wall - before.wall) / 1000;
+    const sim = after.sim - before.sim;
+    const shots = after.shots - before.shots;
+    const ratio = wall > 0 ? sim / wall : 0;
+    console.log(
+      `throttled hold: wall ${wall.toFixed(3)}s sim ${sim.toFixed(3)}s ratio ${ratio.toFixed(3)} shots ${shots} ammo ${before.ammo} -> ${after.ammo} frames ${after.frames - before.frames} onMouseDown ${after.mouseDown}`,
+    );
+    if (!(wall >= 5.5 && wall <= 8)) errors.push(`throttled hold wall time ${wall.toFixed(2)}s`);
+    if (!(ratio >= 0.7 && ratio <= 1.35)) {
+      errors.push(`sim time ran ${ratio.toFixed(2)}× wall time during a 5 fps hold`);
+    }
+    if (!(shots >= 28 && shots <= 56)) {
+      errors.push(`5 fps hold fired ${shots} shots in ${wall.toFixed(2)}s wall (ammo ${after.ammo})`);
+    }
+    if (after.ammo === "0+0") errors.push("5 fps hold emptied 40+40 inside 6 s");
+    if (after.mouseDown < 1) errors.push(`fire mousedown listeners ${after.mouseDown}`);
+    console.log(`throttled listeners: ${after.mouseDownNames.join(", ")}`);
+
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => document.querySelector("#app-shell")?.getAttribute("data-phase") === "paused",
+      undefined,
+      { timeout: 3_000 },
+    );
+    await page.locator("#pause").click();
+    await page.waitForFunction(() => document.pointerLockElement != null, undefined, {
+      timeout: 4_000,
+      polling: 50,
+    });
+    const relocked = await readFire(page);
+    if (relocked.mouseDown !== after.mouseDown) {
+      errors.push(`fire listeners grew after pointer re-lock (${after.mouseDown} -> ${relocked.mouseDown})`);
+    }
+    const burstBefore = relocked;
+    for (let i = 0; i < 8; i += 1) {
+      await page.mouse.down();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await page.mouse.up();
+      await new Promise((resolve) => setTimeout(resolve, 70));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const burstAfter = await readFire(page);
+    const burstShots = burstAfter.shots - burstBefore.shots;
+    console.log(`throttled bursts: ${burstShots} shots from 8 clicks, ammo ${burstAfter.ammo}`);
+    if (burstShots > 12) errors.push(`8 clicks fired ${burstShots} shots`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`throttled fire probe failed: ${message}`);
+  } finally {
+    await page.close();
+  }
+}
+
 try {
   await waitForPort(20_000);
   const browser = await chromium.launch({
@@ -1220,6 +1339,12 @@ try {
     await assertCanvasAspect(page, errors, "after resize 1280x800");
 
     await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
     await assertReadableType(page, errors, "1080p");
     assertHorizontalFov(await readView(page), errors, "after resize 1920x1080");
     await assertCanvasAspect(page, errors, "after resize 1920x1080");
@@ -1281,6 +1406,7 @@ try {
     await assertHiddenTabDoesNotSpike(page, errors);
     await assertLongRun(page, errors);
     await assertContextLoss(page, errors);
+    await assertThrottledFire(browser, errors);
 
     await runDevSmoke(browser, errors);
 
