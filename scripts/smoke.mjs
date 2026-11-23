@@ -1270,47 +1270,81 @@ async function assertThrottledFire(browser, errors) {
     if (relocked.mouseDown !== after.mouseDown) {
       errors.push(`fire listeners grew after pointer re-lock (${after.mouseDown} -> ${relocked.mouseDown})`);
     }
-    const burstBefore = relocked;
+    // The hold stops at whatever the slow sim reached (CI left 4+40). The
+    // burst has to start from a full magazine, or the later clicks land in
+    // the reload and the latch correctly throws them away.
     await page.waitForFunction(
       () => {
         const canvas = document.querySelector("canvas");
         const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
-        return sim != null && sim.reloading === false && sim.mag > 0;
+        return !!sim && sim.reloading === false;
       },
       undefined,
-      { timeout: 3_000, polling: 50 },
+      { timeout: 15_000, polling: 50 },
     );
+    let armed = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+      return { mag: sim?.mag ?? null, reserve: sim?.reserve ?? null };
+    });
+    if (armed.mag !== 40) {
+      if (!(armed.reserve > 0)) {
+        errors.push(`cannot refill ${armed.mag}+${armed.reserve} before the burst`);
+      } else {
+        await page.keyboard.press("KeyR");
+        await page.waitForFunction(
+          () => {
+            const canvas = document.querySelector("canvas");
+            const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+            return !!sim && sim.reloading === false && sim.mag === 40;
+          },
+          undefined,
+          { timeout: 15_000, polling: 50 },
+        );
+      }
+    }
+    const burstBefore = await readFire(page);
+    const ready = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+      return { mag: sim?.mag ?? null, reserve: sim?.reserve ?? null, reloading: sim?.reloading ?? null };
+    });
+    if (ready.mag !== 40 || ready.reloading) {
+      errors.push(`burst mag is ${ready.mag}+${ready.reserve} (reloading ${ready.reloading}), expected 40`);
+    }
     // One click per simulated frame. The rAF cap is 200 ms, so the clicks
     // stay at least 125 ms of sim time apart. A software-GL frame can block
     // the page for longer than 2 s of wall time, so the deadline is generous
     // and the condition is the sim clock, not a fixed sleep.
     const clicks = 8;
-    for (let i = 0; i < clicks; i += 1) {
-      const mark = await page.evaluate(() => {
-        window.dispatchEvent(new MouseEvent("mousedown", { button: 0, buttons: 1, bubbles: true }));
-        window.dispatchEvent(new MouseEvent("mouseup", { button: 0, buttons: 0, bubbles: true }));
-        const canvas = document.querySelector("canvas");
-        const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
-        return { frames: sim?.frames ?? -1, sim: sim?.sim ?? -1 };
-      });
-      await page.waitForFunction(
-        (seen) => {
+    if (ready.mag === 40 && !ready.reloading) {
+      for (let i = 0; i < clicks; i += 1) {
+        const mark = await page.evaluate(() => {
+          window.dispatchEvent(new MouseEvent("mousedown", { button: 0, buttons: 1, bubbles: true }));
+          window.dispatchEvent(new MouseEvent("mouseup", { button: 0, buttons: 0, bubbles: true }));
           const canvas = document.querySelector("canvas");
           const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
-          if (!sim || typeof sim.frames !== "number" || typeof sim.sim !== "number") return false;
-          return sim.frames > seen.frames && sim.sim > seen.sim;
-        },
-        mark,
-        { timeout: 15_000, polling: 50 },
+          return { frames: sim?.frames ?? -1, sim: sim?.sim ?? -1 };
+        });
+        await page.waitForFunction(
+          (seen) => {
+            const canvas = document.querySelector("canvas");
+            const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+            if (!sim || typeof sim.frames !== "number" || typeof sim.sim !== "number") return false;
+            return sim.frames > seen.frames && sim.sim > seen.sim;
+          },
+          mark,
+          { timeout: 15_000, polling: 50 },
+        );
+      }
+      const burstAfter = await readFire(page);
+      const burstShots = burstAfter.shots - burstBefore.shots;
+      console.log(
+        `throttled bursts: ${burstShots} shots from ${clicks} clicks spaced >=125 ms apart, ammo ${burstBefore.ammo} -> ${burstAfter.ammo}`,
       );
-    }
-    const burstAfter = await readFire(page);
-    const burstShots = burstAfter.shots - burstBefore.shots;
-    console.log(
-      `throttled bursts: ${burstShots} shots from ${clicks} clicks spaced >=125 ms apart, ammo ${burstAfter.ammo}`,
-    );
-    if (burstShots !== clicks) {
-      errors.push(`${clicks} clicks spaced >=125 ms apart fired ${burstShots} shots`);
+      if (burstShots !== clicks) {
+        errors.push(`${clicks} clicks spaced >=125 ms apart fired ${burstShots} shots`);
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
