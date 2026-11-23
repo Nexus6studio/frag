@@ -16,6 +16,17 @@ const FPS_SAMPLE_MS = 250;
  * A release after the request has settled is a pause, including Esc in the
  * first second. A death-restart click is `hold` and is not a pause either.
  */
+const PAUSE_RESUME = "fragPauseResume";
+
+/** The Enter that leaves pause. The recap listener must not treat it as a confirm. */
+export function markPauseResume(event: object): void {
+  (event as Record<string, boolean>)[PAUSE_RESUME] = true;
+}
+
+export function isPauseResume(event: object): boolean {
+  return (event as Record<string, boolean | undefined>)[PAUSE_RESUME] === true;
+}
+
 export function unlockShouldPause(input: {
   phase: string;
   requestOpen: boolean;
@@ -143,6 +154,10 @@ export function mountShell(canvas: HTMLCanvasElement): {
 
     if (phase === "paused" && event.code === "Enter") {
       event.preventDefault();
+      // HP can hit 0 in this same turn as Esc. Mark the key and stop it here
+      // so the recap's Enter listener cannot spend the 1 s lockout on a resume.
+      markPauseResume(event);
+      event.stopImmediatePropagation();
       beginPlay();
       return;
     }

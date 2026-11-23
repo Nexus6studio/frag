@@ -143,6 +143,20 @@ export function wishDirection(
   forward: number,
   strafe: number,
 ): { x: number; z: number } | null {
+  const out = { x: 0, z: 0 };
+  return fillWish(yawDeg, forward, strafe, out) ? out : null;
+}
+
+const wishScratch = { x: 0, z: 0 };
+const contactScratch: Vec3[] = [];
+const NO_CONTACTS: Vec3[] = [];
+
+function fillWish(
+  yawDeg: number,
+  forward: number,
+  strafe: number,
+  out: { x: number; z: number },
+): boolean {
   const yaw = (yawDeg * Math.PI) / 180;
   const fx = -Math.sin(yaw);
   const fz = -Math.cos(yaw);
@@ -151,8 +165,10 @@ export function wishDirection(
   const x = fx * forward + rx * strafe;
   const z = fz * forward + rz * strafe;
   const length = Math.hypot(x, z);
-  if (length < 1e-8) return null;
-  return { x: x / length, z: z / length };
+  if (length < 1e-8) return false;
+  out.x = x / length;
+  out.z = z / length;
+  return true;
 }
 
 export function intentFromInput(input: InputState, yawDeg: number): MoveIntent {
@@ -167,7 +183,7 @@ export function intentFromInput(input: InputState, yawDeg: number): MoveIntent {
 export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, hull: Hull): MoveState {
   if (!(dt > 0)) return cloneState(state);
 
-  const wish = wishDirection(intent.yawDeg, intent.forward, intent.strafe);
+  const wish = fillWish(intent.yawDeg, intent.forward, intent.strafe, wishScratch) ? wishScratch : null;
   const groundWish =
     intent.wishSpeed !== undefined && intent.wishSpeed > 0 ? intent.wishSpeed : GROUND_WISH_SPEED;
   const airWish = intent.wishSpeed !== undefined && intent.wishSpeed > 0 ? intent.wishSpeed : AIR_WISH_SPEED;
@@ -182,7 +198,7 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
   const contacts =
     startedGrounded && wish
       ? wallNormals(state.position, state.position.y, hull, canStep, CONTACT_SKIN)
-      : [];
+      : NO_CONTACTS;
   const projected = contacts.length > 0 ? projectPlanar(wish!, contacts) : null;
   const steered = contacts.length > 0 ? projected : wish;
 
@@ -573,7 +589,9 @@ function deepestWall(
 }
 
 function wallNormals(pos: Vec3, feetY: number, hull: Hull, canStep: boolean, padding: number): Vec3[] {
-  const normals: Vec3[] = [];
+  // Reused across steps. stepMovement reads it before the next call.
+  const normals = contactScratch;
+  normals.length = 0;
   for (const box of hull.boxes) {
     if (feetY >= box.max.y - 0.02) continue;
     if (canStep && isStep(box, feetY)) continue;
