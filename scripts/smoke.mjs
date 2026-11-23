@@ -726,9 +726,15 @@ async function assertQuillFire(page, errors) {
       await refilled(mid);
     } catch (retryError) {
       const message = retryError instanceof Error ? retryError.message.split("\n")[0] : String(retryError);
-      const text = await page.evaluate(() => document.querySelector("#hud-ammo")?.textContent ?? "");
-      const phase = await page.evaluate(() => document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "");
-      errors.push(`reload did not refill the magazine (now ${text}, phase ${phase}): ${message}`);
+      const snap = await page.evaluate(() => ({
+        text: document.querySelector("#hud-ammo")?.textContent ?? "",
+        phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+        hp: document.querySelector("#hud-hp")?.textContent ?? "",
+        mode: document.querySelector("#hud")?.getAttribute("data-mode") ?? "",
+      }));
+      errors.push(
+        `reload did not refill the magazine (now ${snap.text}, hp ${snap.hp}, hud ${snap.mode}, phase ${snap.phase}): ${message}`,
+      );
     }
   }
   const drones = await readDrones(page);
@@ -905,6 +911,11 @@ async function assertShellFlow(page, errors) {
     }
   }
 
+  // Fire and reload while spawn grace still holds. The weapon sim stops at
+  // 0 HP, and the shell stays in "playing", so a later R cannot refill a
+  // magazine the fight has already frozen.
+  await assertQuillFire(page, errors);
+
   const recapHit = await page.evaluate(() => {
     const death = document.querySelector("#death-recap");
     const style = death instanceof HTMLElement ? getComputedStyle(death) : null;
@@ -1016,8 +1027,6 @@ async function assertShellFlow(page, errors) {
       );
     }
   }
-
-  await assertQuillFire(page, errors);
 
   await page.keyboard.press("KeyM");
   const muted = await page.locator("#hud-mute").evaluate((el) => ({
