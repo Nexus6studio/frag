@@ -256,11 +256,13 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     finite(vitals.mag, "mag");
     finite(vitals.reserve, "reserve");
     assert.ok(vitals.hp >= 0 && vitals.hp <= 100, `hp ${vitals.hp}`);
-    assert.ok(vitals.armor >= 0, `armor ${vitals.armor}`);
+    assert.ok(vitals.armor >= 0 && vitals.armor <= 100, `armor ${vitals.armor}`);
     assert.ok(vitals.mag >= 0 && vitals.mag <= QUILL_MAG, `mag ${vitals.mag}`);
     assert.ok(vitals.reserve >= 0 && vitals.reserve <= QUILL_RESERVE_CAP, `reserve ${vitals.reserve}`);
     const hud = hudReadout(vitals, "playing");
     assert.match(hud.hp, /^(100|[1-9]?\d)$/);
+    assert.match(hud.armor, /^(100|[1-9]?\d)$/);
+    assert.equal(hud.showArmor, true);
     assert.match(hud.ammo, /^\d+\+\d+$/);
 
     if (step >= WARMUP_STEPS && step % 1200 === 0) {

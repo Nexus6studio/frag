@@ -78,8 +78,8 @@ test("restart restores the start vitals", () => {
   assert.deepEqual(player.get(), { hp: 100, armor: 0, mag: 40, reserve: 40 });
 });
 
-test("hud readout follows player state and keeps armor hidden", () => {
-  assert.equal(SHOW_ARMOR, false);
+test("hud readout follows player state and shows armor", () => {
+  assert.equal(SHOW_ARMOR, true);
   const player = createPlayerState();
   let phase = "playing";
   const els = fakeHud();
@@ -88,9 +88,9 @@ test("hud readout follows player state and keeps armor hidden", () => {
   assert.equal(els.hp.textContent, "100");
   assert.equal(els.armor.textContent, "0");
   assert.equal(els.ammo.textContent, "40+40");
-  assert.equal(els.armorStat.style.visibility, "hidden");
-  assert.equal(els.armorStat.dataset.visible, "false");
-  assert.equal(els.armorStat.attrs["aria-hidden"], "true");
+  assert.equal(els.armorStat.style.visibility, "visible");
+  assert.equal(els.armorStat.dataset.visible, "true");
+  assert.equal(els.armorStat.attrs["aria-hidden"], undefined);
   assert.equal(els.root.dataset.mode, "play");
   assert.equal(els.death.hidden, true);
   assert.equal(els.death.inert, true);
@@ -102,8 +102,8 @@ test("hud readout follows player state and keeps armor hidden", () => {
   assert.equal(els.hp.textContent, "73");
   assert.equal(els.armor.textContent, "15");
   assert.equal(els.ammo.textContent, "10+5");
-  assert.equal(els.armorStat.style.visibility, "hidden");
-  assert.equal(hudReadout(player.get(), "playing").showArmor, false);
+  assert.equal(els.armorStat.style.visibility, "visible");
+  assert.equal(hudReadout(player.get(), "playing").showArmor, true);
 
   phase = "paused";
   hud.update();
@@ -137,6 +137,8 @@ test("hud readout follows player state and keeps armor hidden", () => {
   hud.update();
   assert.equal(els.root.dataset.mode, "play");
   assert.equal(els.hp.textContent, "100");
+  assert.equal(els.armor.textContent, "0");
+  assert.equal(els.armorStat.style.visibility, "visible");
   assert.equal(els.ammo.textContent, "40+40");
 
   hud.destroy();

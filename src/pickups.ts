@@ -1,38 +1,41 @@
-// Health and ammo pickups, and the damage rule the drone will call.
+// Health, armor, and ammo pickups, and the damage rule combat calls.
 //
 // A pad is collected when the player capsule touches its trigger box. Health
-// adds 25 and stops at 100. Ammo adds 40 flechettes to the Quill Driver reserve
-// and does not move rounds into the magazine; reserve stops at 80, so a full
-// magazine and 70 in reserve becomes 40+80. A pad that cannot add anything is
-// left alone. After a collection the pad stays dark until its timer elapses
-// (20 s health, 15 s ammo), then it can be taken again.
+// adds 25 and stops at 100. Armor adds 25 and stops at 100. Ammo adds 40
+// flechettes to the Quill Driver reserve and does not move rounds into the
+// magazine; reserve stops at 80, so a full magazine and 70 in reserve becomes
+// 40+80. A pad that cannot add anything is left alone. After a collection the
+// pad stays dark until its timer elapses (20 s health, 25 s armor, 15 s ammo),
+// then it can be taken again.
 //
-// Armor pads stay in the atrium landmark list. ARMOR_ENABLED is false for this
-// release, so they are not simulated and not drawn. The armor HUD slot stays
-// hidden. Flipping the flag is the later armor ticket.
-//
-// Damage for D against armor A: the armor absorbs min(A, floor(D·2/3)), and
-// the rest comes off HP. A positive hit that would remove less than 1 HP still
-// removes 1. HP is clamped at 0, which is the existing click-to-restart death.
+// Damage for D against armor A: wanted is floor(D·2/3), absorbed is
+// min(A, wanted), and HP loses max(1, D − absorbed). Armor falls by the
+// absorbed amount. HP is clamped at 0, which is the existing click-to-restart
+// death. The player and the UNIT-7 enforcer both call this rule.
 
 import { ATRIUM_PADS, type AtriumPad, type PadKind } from "./atrium.ts";
 import { CAPSULE_HEIGHT, CAPSULE_RADIUS, type Vec3 } from "./move.ts";
 import type { PlayerStore } from "./player/state.ts";
 
-export const ARMOR_ENABLED = false;
+export const ARMOR_ENABLED = true;
 
 export const HP_CAP = 100;
 export const HEALTH_PICKUP = 25;
 export const HEALTH_RESPAWN_SECONDS = 20;
+export const ARMOR_CAP = 100;
+export const ARMOR_PICKUP = 25;
+export const ARMOR_RESPAWN_SECONDS = 25;
 export const AMMO_PICKUP = 40;
 export const RESERVE_CAP = 80;
 export const AMMO_RESPAWN_SECONDS = 15;
 
 export const HEALTH_COLOR = 0xc8ff3d;
 export const AMMO_COLOR = 0xff2e9f;
-/** Dim acid and dim magenta. The pad stays in the scene, unlit, until it returns. */
+export const ARMOR_COLOR = 0x00e5ff;
+/** Dim acid, dim magenta, and dim cyan. The pad stays in the scene, unlit, until it returns. */
 export const HEALTH_DORMANT = 0x384711;
 export const AMMO_DORMANT = 0x470d2c;
+export const ARMOR_DORMANT = 0x06343d;
 
 /** Horizontal half-extent of a pad trigger, meters. */
 export const PAD_TRIGGER_HALF_XZ = 0.6;
@@ -55,6 +58,11 @@ export interface ReserveGrant {
 
 export interface HealthGrant {
   hp: number;
+  gained: number;
+}
+
+export interface ArmorGrant {
+  armor: number;
   gained: number;
 }
 
@@ -103,6 +111,15 @@ export function grantHealth(hp: number, amount = HEALTH_PICKUP): HealthGrant {
   const room = Math.max(0, HP_CAP - current);
   const gained = Math.min(add, room);
   return { hp: current + gained, gained };
+}
+
+/** Armor only. A full vest (100) gains nothing, so the pad stays lit. */
+export function grantArmor(armor: number, amount = ARMOR_PICKUP): ArmorGrant {
+  const current = Number.isFinite(armor) ? armor : 0;
+  const add = Number.isFinite(amount) && amount > 0 ? amount : 0;
+  const room = Math.max(0, ARMOR_CAP - current);
+  const gained = Math.min(add, room);
+  return { armor: current + gained, gained };
 }
 
 /** Reserve only. The magazine is filled by reload, not by the pad. */
@@ -175,9 +192,11 @@ export function createPickupSim(bank: ReserveBank | null = null, source: readonl
       }
 
       let hp = player.get().hp;
+      let armor = player.get().armor;
       let hpDirty = false;
+      let armorDirty = false;
       for (const pad of pads) {
-        if (pad.cooldown > 0 || pad.kind === "armor") continue;
+        if (pad.cooldown > 0) continue;
         const box = padTrigger(pad);
         if (!capsuleOverlapsAabb(feet, box.min, box.max)) continue;
         if (pad.kind === "health") {
@@ -188,11 +207,24 @@ export function createPickupSim(bank: ReserveBank | null = null, source: readonl
           pad.cooldown = HEALTH_RESPAWN_SECONDS;
           continue;
         }
+        if (pad.kind === "armor") {
+          const granted = grantArmor(armor);
+          if (granted.gained <= 0) continue;
+          armor = granted.armor;
+          armorDirty = true;
+          pad.cooldown = ARMOR_RESPAWN_SECONDS;
+          continue;
+        }
         const gained = giveReserve(player, bank, AMMO_PICKUP);
         if (gained <= 0) continue;
         pad.cooldown = AMMO_RESPAWN_SECONDS;
       }
-      if (hpDirty) player.set({ hp });
+      if (hpDirty || armorDirty) {
+        const patch: { hp?: number; armor?: number } = {};
+        if (hpDirty) patch.hp = hp;
+        if (armorDirty) patch.armor = armor;
+        player.set(patch);
+      }
     },
   };
 }
