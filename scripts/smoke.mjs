@@ -420,7 +420,8 @@ async function assertShellFlow(page, errors) {
       cursor: canvas instanceof HTMLElement ? getComputedStyle(canvas).cursor : "missing",
       debug:
         Object.prototype.hasOwnProperty.call(window, "__fragPlayer") ||
-        Object.prototype.hasOwnProperty.call(window, "__fragMove"),
+        Object.prototype.hasOwnProperty.call(window, "__fragMove") ||
+        Object.prototype.hasOwnProperty.call(window, "__fragDamage"),
       barFromBottom: window.innerHeight - barBox.bottom,
       hpOnLeft: hpBox.left < window.innerWidth / 2,
       ammoOnRight: ammoBox.right > window.innerWidth / 2,
@@ -429,7 +430,7 @@ async function assertShellFlow(page, errors) {
   if (readout.error) errors.push(readout.error);
   else {
     if (readout.hp !== "100" || !readout.hpShown) errors.push(`hp readout is ${readout.hp}`);
-  await assertDrones(page, errors, "at play start");
+    await assertDrones(page, errors, "at play start");
     if (readout.ammo !== "40+40" || !readout.ammoShown) errors.push(`ammo readout is ${readout.ammo}`);
     if (readout.armorText !== "0") errors.push(`armor value is ${readout.armorText}`);
     if (readout.armorVisibility !== "hidden") {
@@ -735,7 +736,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> pause -> resume -> reload, readable type at 480p, 720p, and 1080p, no console warnings outside the allowlist`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> pause -> resume -> reload, readable type at 480p, 720p, and 1080p, no console warnings outside the allowlist, no third-party requests, localStorage empty`,
       );
     }
   } finally {

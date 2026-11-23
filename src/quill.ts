@@ -89,6 +89,11 @@ export interface QuillDriver {
   readonly slots: readonly FlechetteSlot[];
   shotTime(index: number): number;
   shotDirection(index: number): Vec3;
+  /**
+   * Stores flechettes in the reserve, capped at 80. Does not fill the
+   * magazine. Returns how many rounds fit. Ammo pads call this.
+   */
+  grantReserve(amount: number): number;
 }
 
 export function aimDirection(yawDeg: number, pitchDeg: number, out: Vec3): Vec3 {
@@ -363,6 +368,15 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     shotDirection(index: number): Vec3 {
       if (index < 0 || index >= recorded) return missed;
       return shotDirs[index]!;
+    },
+    grantReserve(amount: number): number {
+      if (!Number.isFinite(amount) || amount <= 0) return 0;
+      const room = QUILL_RESERVE_CAP - reserve;
+      if (room <= 0) return 0;
+      const gain = amount < room ? amount : room;
+      reserve += gain;
+      publish();
+      return gain;
     },
   };
 }

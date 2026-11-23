@@ -31,14 +31,22 @@ import {
   type AtriumRamp,
   type AtriumStair,
 } from "./atrium.ts";
+import {
+  AMMO_COLOR,
+  AMMO_DORMANT,
+  ARMOR_ENABLED,
+  HEALTH_COLOR,
+  HEALTH_DORMANT,
+  type PickupPad,
+} from "./pickups.ts";
 
 const VOID = 0x0a0b10;
 const CONCRETE = 0x1a1d24;
 const CYAN = 0x00e5ff;
 const MAGENTA = 0xff2e9f;
-const ACID = 0xc8ff3d;
-const ALERT = 0xff3b3b;
 const AMBER = 0xf5a623;
+const ARMOR_COLOR = 0x00e5ff;
+const ARMOR_DORMANT = 0x06343d;
 
 class Soup {
   readonly position: number[] = [];
@@ -262,23 +270,132 @@ function addBeacons(soup: Soup): void {
   }
 }
 
-function addPad(soup: Soup, pad: AtriumPad): void {
-  const y = pad.position.y + 0.025;
+export interface PadView {
+  kind: AtriumPad["kind"];
+  x: number;
+  y: number;
+  z: number;
+  mesh: Mesh;
+  setAvailable(available: boolean): void;
+}
+
+function padMaterial(color: number, name: string): MeshBasicMaterial {
+  const material = new MeshBasicMaterial({ color, toneMapped: false });
+  material.name = name;
+  return material;
+}
+
+function padMesh(
+  soup: Soup,
+  pad: AtriumPad,
+  live: MeshBasicMaterial,
+  dormant: MeshBasicMaterial,
+  name: string,
+): PadView {
+  const mesh = new Mesh(soup.geometry(), live);
+  mesh.name = name;
+  return {
+    kind: pad.kind,
+    x: pad.position.x,
+    y: pad.position.y,
+    z: pad.position.z,
+    mesh,
+    setAvailable(available: boolean): void {
+      mesh.material = available ? live : dormant;
+    },
+  };
+}
+
+/** Acid-green canister with a cross on the cap. */
+function addHealthShape(soup: Soup, pad: AtriumPad): void {
   const { x, z } = pad.position;
-  if (pad.kind === "health") {
-    soup.box(x - 0.42, x + 0.42, y, y + 0.05, z - 0.12, z + 0.12);
-    soup.box(x - 0.12, x + 0.12, y, y + 0.05, z - 0.42, z + 0.42);
-    return;
+  const y = pad.position.y + 0.02;
+  soup.box(x - 0.11, x + 0.11, y + 0.04, y + 0.52, z - 0.11, z + 0.11);
+  soup.box(x - 0.14, x + 0.14, y + 0.42, y + 0.5, z - 0.14, z + 0.14);
+  soup.box(x - 0.07, x + 0.07, y + 0.5, y + 0.62, z - 0.07, z + 0.07);
+  soup.box(x - 0.26, x + 0.26, y + 0.66, y + 0.76, z - 0.05, z + 0.05);
+  soup.box(x - 0.05, x + 0.05, y + 0.56, y + 0.86, z - 0.05, z + 0.05);
+}
+
+/** Magenta crate: a box, a lid, and four corner posts. */
+function addAmmoShape(soup: Soup, pad: AtriumPad): void {
+  const { x, z } = pad.position;
+  const y = pad.position.y + 0.02;
+  soup.box(x - 0.22, x + 0.22, y, y + 0.28, z - 0.16, z + 0.16);
+  soup.box(x - 0.25, x + 0.25, y + 0.28, y + 0.36, z - 0.19, z + 0.19);
+  const posts: readonly (readonly [number, number])[] = [
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+    [1, 1],
+  ];
+  for (const [sx, sz] of posts) {
+    soup.box(
+      x + sx * 0.22 - 0.035,
+      x + sx * 0.22 + 0.035,
+      y,
+      y + 0.42,
+      z + sz * 0.16 - 0.035,
+      z + sz * 0.16 + 0.035,
+    );
   }
-  if (pad.kind === "armor") {
-    soup.box(x - 0.46, x + 0.46, y, y + 0.05, z - 0.46, z - 0.3);
-    soup.box(x - 0.46, x + 0.46, y, y + 0.05, z + 0.3, z + 0.46);
-    soup.box(x - 0.46, x - 0.3, y, y + 0.05, z - 0.3, z + 0.3);
-    soup.box(x + 0.3, x + 0.46, y, y + 0.05, z - 0.3, z + 0.3);
-    return;
+}
+
+/** Square shell. Drawn only when ARMOR_ENABLED is on. */
+function addArmorShape(soup: Soup, pad: AtriumPad): void {
+  const { x, z } = pad.position;
+  const y = pad.position.y + 0.02;
+  soup.box(x - 0.28, x + 0.28, y, y + 0.08, z - 0.28, z - 0.16);
+  soup.box(x - 0.28, x + 0.28, y, y + 0.08, z + 0.16, z + 0.28);
+  soup.box(x - 0.28, x - 0.16, y, y + 0.08, z - 0.16, z + 0.16);
+  soup.box(x + 0.16, x + 0.28, y, y + 0.08, z - 0.16, z + 0.16);
+  soup.box(x - 0.08, x + 0.08, y + 0.08, y + 0.36, z - 0.08, z + 0.08);
+}
+
+function buildPadViews(): { pads: PadView[]; triangles: number } {
+  const healthLive = padMaterial(HEALTH_COLOR, "pad-health-live");
+  const healthDim = padMaterial(HEALTH_DORMANT, "pad-health-dormant");
+  const ammoLive = padMaterial(AMMO_COLOR, "pad-ammo-live");
+  const ammoDim = padMaterial(AMMO_DORMANT, "pad-ammo-dormant");
+  const armorLive = padMaterial(ARMOR_COLOR, "pad-armor-live");
+  const armorDim = padMaterial(ARMOR_DORMANT, "pad-armor-dormant");
+  const pads: PadView[] = [];
+  let triangles = 0;
+  for (const pad of ATRIUM_PADS) {
+    if (pad.kind === "armor" && !ARMOR_ENABLED) continue;
+    const soup = new Soup();
+    if (pad.kind === "health") addHealthShape(soup, pad);
+    else if (pad.kind === "ammo") addAmmoShape(soup, pad);
+    else addArmorShape(soup, pad);
+    const live = pad.kind === "health" ? healthLive : pad.kind === "ammo" ? ammoLive : armorLive;
+    const dormant = pad.kind === "health" ? healthDim : pad.kind === "ammo" ? ammoDim : armorDim;
+    pads.push(padMesh(soup, pad, live, dormant, `pad-${pad.kind}`));
+    triangles += soup.triangles;
   }
-  soup.box(x - 0.28, x + 0.28, y, y + 0.08, z - 0.18, z + 0.18);
-  soup.box(x - 0.12, x + 0.12, y + 0.08, y + 0.16, z - 0.1, z + 0.1);
+  return { pads, triangles };
+}
+
+export function syncPadViews(views: readonly PadView[], pads: readonly PickupPad[]): void {
+  for (const view of views) {
+    let pad: PickupPad | undefined;
+    for (const candidate of pads) {
+      if (
+        candidate.kind === view.kind &&
+        candidate.x === view.x &&
+        candidate.y === view.y &&
+        candidate.z === view.z
+      ) {
+        pad = candidate;
+        break;
+      }
+    }
+    if (!pad) {
+      view.mesh.visible = false;
+      continue;
+    }
+    view.mesh.visible = true;
+    view.setAvailable(pad.cooldown <= 0);
+  }
 }
 
 function signMaterial(): MeshBasicMaterial | null {
@@ -326,6 +443,7 @@ function addSigns(meshes: Mesh[], triangles: { count: number }): void {
 export interface AtriumView {
   meshes: Mesh[];
   triangles: number;
+  pads: PadView[];
 }
 
 export function buildAtriumView(): AtriumView {
@@ -336,36 +454,26 @@ export function buildAtriumView(): AtriumView {
   addChannels(cyan, magenta);
   const amber = new Soup();
   addBeacons(amber);
-  const health = new Soup();
-  const armor = new Soup();
-  const ammo = new Soup();
-  for (const pad of ATRIUM_PADS) {
-    if (pad.kind === "health") addPad(health, pad);
-    else if (pad.kind === "armor") addPad(armor, pad);
-    else addPad(ammo, pad);
-  }
+  const pads = buildPadViews();
 
   const meshes = [
     concreteMesh(concrete),
     glowMesh(cyan, CYAN, "atrium-cyan"),
     glowMesh(magenta, MAGENTA, "atrium-magenta"),
     glowMesh(amber, AMBER, "atrium-amber"),
-    glowMesh(health, ALERT, "atrium-health"),
-    glowMesh(armor, CYAN, "atrium-armor"),
-    glowMesh(ammo, ACID, "atrium-ammo"),
   ];
-  let triangles = concrete.triangles + cyan.triangles + magenta.triangles + amber.triangles;
-  triangles += health.triangles + armor.triangles + ammo.triangles;
+  for (const pad of pads.pads) meshes.push(pad.mesh);
+  let triangles = concrete.triangles + cyan.triangles + magenta.triangles + amber.triangles + pads.triangles;
   const extra = { count: 0 };
   addSigns(meshes, extra);
   triangles += extra.count;
-  return { meshes, triangles };
+  return { meshes, triangles, pads: pads.pads };
 }
 
-export function addAtrium(scene: Scene): { triangles: number; meshes: number } {
+export function addAtrium(scene: Scene): { triangles: number; meshes: number; pads: PadView[] } {
   const view = buildAtriumView();
   for (const mesh of view.meshes) scene.add(mesh);
-  return { triangles: view.triangles, meshes: view.meshes.length };
+  return { triangles: view.triangles, meshes: view.meshes.length, pads: view.pads };
 }
 
 export const ATRIUM_CLEAR = VOID;

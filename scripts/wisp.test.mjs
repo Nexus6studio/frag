@@ -350,11 +350,39 @@ test("altitude rises inside 6 m, and a 120 s chase stays inside the atrium", () 
   assert.ok(maxCatwalk > 4.5, `drones did not climb toward the catwalk (${maxCatwalk})`);
 });
 
-test("damagePlayer is the bolt seam and drops 8 HP while armor is untouched", () => {
+test("damagePlayer is the bolt seam and applies armor absorb", () => {
   const player = createPlayerState({ hp: 100, armor: 0 });
   damagePlayer(player, WISP_BOLT_DAMAGE);
   assert.equal(player.get().hp, 92);
   assert.equal(player.get().armor, 0);
   damagePlayer(player, 0);
   assert.equal(player.get().hp, 92);
+
+  // floor(8·2/3) = 5 absorbed from 9 armor, so HP loses 3.
+  const armored = createPlayerState({ hp: 80, armor: 9 });
+  damagePlayer(armored, WISP_BOLT_DAMAGE);
+  assert.equal(armored.get().hp, 77);
+  assert.equal(armored.get().armor, 4);
+});
+
+test("a live bolt deals 8 through applyDamage when the player has armor", () => {
+  const open = {
+    boxes: [{ min: { x: -30, y: -1, z: -30 }, max: { x: 30, y: 0, z: 30 } }],
+    ramps: [],
+  };
+  const player = createPlayerState({ hp: 80, armor: 9 });
+  const sim = createWispSim({
+    hull: open,
+    player,
+    hitboxes: createHitboxWorld(),
+    origin: { x: 0, y: 0, z: 0 },
+  });
+  const feet = { x: 0, y: 0, z: 0 };
+  let t = 0;
+  while (player.get().hp === 80 && t < 4) {
+    sim.update(DT, feet);
+    t += DT;
+  }
+  assert.equal(player.get().hp, 77);
+  assert.equal(player.get().armor, 4);
 });
