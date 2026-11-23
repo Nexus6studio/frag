@@ -18,6 +18,7 @@
 
 import { CEILING_Y, KILL_Y, MAP_HALF, PARAPET_Y } from "./atrium.ts";
 import type { CueListener } from "./cues.ts";
+import { HIT_FLASH_SECONDS } from "./feel.ts";
 import type { HitboxHandle, HitboxWorld } from "./hitbox.ts";
 import { playerHitboxes } from "./hitbox.ts";
 import { CAPSULE_HEIGHT, CAPSULE_RADIUS, EYE_HEIGHT, type BoxSolid, type Hull, type RampSolid, type Vec3 } from "./move.ts";
@@ -89,6 +90,8 @@ export interface WispDrone {
   phase: WispPhase;
   timer: number;
   yaw: number;
+  /** Seconds of white-cyan hit flash still left. */
+  hitFlash: number;
 }
 
 export interface WispBolt {
@@ -165,6 +168,8 @@ export interface WispSim {
   telegraphTime(drone: number, index: number): number;
   /** Start the gap when drones and any allied enforcers are all dead. */
   notifyAllies(): void;
+  /** Age the hit flash. Safe to call when the rest of the sim is paused. */
+  tickFlash(dt: number): void;
   snapshot(): WispSnapshot;
 }
 
@@ -576,7 +581,7 @@ export function createWispSim(options: WispOptions): WispSim {
     bolt.hit = true;
     if (player.get().hp <= 0) return;
     const before = player.get().hp;
-    damagePlayer(player, WISP_BOLT_DAMAGE);
+    damagePlayer(player, WISP_BOLT_DAMAGE, bolt);
     if (player.get().hp === before) return;
     boltsHit += 1;
     damageEvents += 1;
@@ -605,6 +610,7 @@ export function createWispSim(options: WispOptions): WispSim {
       const drone = drones[i]!;
       drone.alive = false;
       drone.hp = 0;
+      drone.hitFlash = 0;
       drone.handle.setActive(false);
     }
     for (let i = 0; i < plan.drones; i += 1) {
@@ -615,6 +621,7 @@ export function createWispSim(options: WispOptions): WispSim {
       drone.position.z = point.z;
       drone.alive = true;
       drone.hp = WISP_HP;
+      drone.hitFlash = 0;
       drone.phase = "grace";
       drone.timer = 0;
       drone.handle.setActive(true);
@@ -693,6 +700,15 @@ export function createWispSim(options: WispOptions): WispSim {
       const drone = drones[index];
       if (!drone) return;
       applyFlechette(drone, amount);
+    },
+    tickFlash(dt: number): void {
+      if (!(dt > 0)) return;
+      for (let i = 0; i < drones.length; i += 1) {
+        const drone = drones[i]!;
+        if (!(drone.hitFlash > 0)) continue;
+        drone.hitFlash -= dt;
+        if (drone.hitFlash < 0) drone.hitFlash = 0;
+      }
     },
     killAlive(): void {
       for (let i = 0; i < drones.length; i += 1) {
@@ -822,6 +838,7 @@ export function createWispSim(options: WispOptions): WispSim {
   function applyFlechette(drone: Drone, amount: number): void {
     if (!drone.alive || !Number.isFinite(amount) || amount <= 0) return;
     drone.hp -= amount;
+    drone.hitFlash = HIT_FLASH_SECONDS;
     if (drone.hp > 0) {
       options.onEvent?.({ type: "enemy-hit" });
       return;
@@ -881,6 +898,7 @@ function makeDrone(
     phase,
     timer: 0,
     yaw: 0,
+    hitFlash: 0,
     handle: null as unknown as HitboxHandle,
   };
   drone.handle = hitboxes.register({

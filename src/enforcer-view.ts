@@ -32,6 +32,7 @@ import {
   type EnforcerFlash,
   type EnforcerSim,
 } from "./enforcer.ts";
+import { HIT_FLASH_RGB, hitFlashAlpha } from "./feel.ts";
 import { GORE_BLOOD, GORE_DECAL_CAP, GORE_GIB_CAP, GORE_SPRAY_CAP, type GoreDecal, type GorePart } from "./gore.ts";
 import { ENFORCER_CAP } from "./waves.ts";
 
@@ -60,8 +61,20 @@ export function mountEnforcerView(scene: Scene, sim: EnforcerSim): { sync(): voi
     toneMapped: false,
     fog: true,
   });
-  const bodies = instanced(bodyGeometry(), bodyMat, ENFORCER_CAP);
+  const bodyGeom = bodyGeometry();
+  const bodies = instanced(bodyGeom, bodyMat, ENFORCER_CAP);
   bodies.name = "enforcer-body";
+
+  const shellMat = new MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    blending: AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+    fog: false,
+  });
+  const shells = instanced(bodyGeom, shellMat, ENFORCER_CAP);
+  shells.name = "enforcer-hit-flash";
 
   const visorMat = new MeshBasicMaterial({
     color: 0xff4a1a,
@@ -142,7 +155,7 @@ export function mountEnforcerView(scene: Scene, sim: EnforcerSim): { sync(): voi
   decals.name = "enforcer-decals";
   paint(decals, _color.setRGB(1, 1, 1));
 
-  scene.add(bodies, visors, tracers, sparkPoints, bloodPoints, gibs, decals);
+  scene.add(bodies, shells, visors, tracers, sparkPoints, bloodPoints, gibs, decals);
 
   return {
     sync(): void {
@@ -159,6 +172,19 @@ export function mountEnforcerView(scene: Scene, sim: EnforcerSim): { sync(): voi
       }
       show(bodies, shown);
       show(visors, shown);
+
+      let shellCount = 0;
+      for (let i = 0; i < units.length; i += 1) {
+        const unit = units[i]!;
+        const alpha = hitFlashAlpha(unit.hitFlash);
+        if (!(alpha > 0.02)) continue;
+        const falling = !unit.alive && unit.down >= 0 && unit.down < 0.5;
+        const fall = falling ? unit.down / 0.5 : 0;
+        placeShell(shells, shellCount, unit.position.x, unit.position.y - fall * 0.35, unit.position.z, unit.yaw, fall, alpha);
+        shellCount += 1;
+      }
+      show(shells, shellCount);
+      if (shellCount > 0 && shells.instanceColor) shells.instanceColor.needsUpdate = true;
 
       let flashes = 0;
       const shots = sim.flashes;
@@ -205,6 +231,29 @@ function show(mesh: InstancedMesh, count: number): void {
   mesh.count = count;
   mesh.visible = count > 0;
   if (count > 0) mesh.instanceMatrix.needsUpdate = true;
+}
+
+function placeShell(
+  mesh: InstancedMesh,
+  index: number,
+  x: number,
+  y: number,
+  z: number,
+  yaw: number,
+  fall: number,
+  alpha: number,
+): void {
+  _quat.setFromAxisAngle(_up, yaw);
+  if (fall > 0) {
+    _tilt.setFromAxisAngle(_right, fall * 1.35);
+    _quat.multiply(_tilt);
+  }
+  _pos.set(x, y, z);
+  _scale.set(1.04, 1.04, 1.04);
+  _matrix.compose(_pos, _quat, _scale);
+  mesh.setMatrixAt(index, _matrix);
+  _color.setRGB(HIT_FLASH_RGB[0] * alpha, HIT_FLASH_RGB[1] * alpha, HIT_FLASH_RGB[2] * alpha);
+  mesh.setColorAt(index, _color);
 }
 
 function placeBody(mesh: InstancedMesh, index: number, x: number, y: number, z: number, yaw: number, fall: number): void {

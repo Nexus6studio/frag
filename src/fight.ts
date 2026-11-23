@@ -14,6 +14,8 @@ export interface Fight {
   readonly enforcers: EnforcerSim;
   readonly director: WaveDirector;
   update(dt: number, feet: Vec3): void;
+  /** Age enemy hit flashes without stepping the fight. */
+  tickFlash(dt: number): void;
   killAll(): void;
   snapshot(): WispSnapshot & {
     enforcerAlive: number;
@@ -61,6 +63,10 @@ export function createFight(options: {
     update(dt: number, feet: Vec3): void {
       wisps.update(dt, feet);
       enforcers.update(dt, feet);
+    },
+    tickFlash(dt: number): void {
+      wisps.tickFlash(dt);
+      enforcers.tickFlash(dt);
     },
     killAll(): void {
       enforcers.killAlive();

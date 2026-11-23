@@ -22,6 +22,7 @@ import {
   type PerspectiveCamera,
   type Scene,
 } from "three";
+import { HIT_FLASH_RGB, hitFlashAlpha } from "./feel.ts";
 import { DRONE_CAP } from "./waves.ts";
 import {
   WISP_BOLT_CAP,
@@ -71,6 +72,18 @@ export function mountWispView(scene: Scene, sim: WispSim, camera?: PerspectiveCa
   });
   const bodies = instanced(discGeometry(), bodyMat, DRONE_CAP);
   bodies.name = "wisp-body";
+
+  const shellMat = new MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    blending: AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+    fog: false,
+    side: DoubleSide,
+  });
+  const shells = instanced(discGeometry(), shellMat, DRONE_CAP);
+  shells.name = "wisp-hit-flash";
 
   const visorMat = new MeshBasicMaterial({
     color: 0xffffff,
@@ -131,7 +144,7 @@ export function mountWispView(scene: Scene, sim: WispSim, camera?: PerspectiveCa
   const fluid = instanced(tetraGeometry(), fluidMat, WISP_FLUID_CAP);
   fluid.name = "wisp-fluid";
 
-  scene.add(bodies, visors, glows, bolts, sparkPoints, gibs, fluid);
+  scene.add(bodies, shells, visors, glows, bolts, sparkPoints, gibs, fluid);
 
   return {
     sync(): void {
@@ -155,6 +168,19 @@ export function mountWispView(scene: Scene, sim: WispSim, camera?: PerspectiveCa
       }
       show(bodies, bodyCount);
       show(visors, bodyCount);
+      let flashCount = 0;
+      for (let i = 0; i < drones.length; i += 1) {
+        const drone = drones[i]!;
+        const alpha = hitFlashAlpha(drone.hitFlash);
+        if (!(alpha > 0.02)) continue;
+        const spin = sim.time * 1.7 + drone.index * 1.4;
+        place(shells, flashCount, drone.position.x, drone.position.y, drone.position.z, spin, 1.14);
+        _color.setRGB(HIT_FLASH_RGB[0] * alpha, HIT_FLASH_RGB[1] * alpha, HIT_FLASH_RGB[2] * alpha);
+        shells.setColorAt(flashCount, _color);
+        flashCount += 1;
+      }
+      show(shells, flashCount);
+      if (flashCount > 0 && shells.instanceColor) shells.instanceColor.needsUpdate = true;
       if (visors.instanceColor) visors.instanceColor.needsUpdate = true;
       glowMat.opacity = 0.82 + Math.sin(sim.time * 22) * 0.14;
       show(glows, glowCount);

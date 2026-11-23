@@ -66,6 +66,10 @@ Two health pads, two armor pads, and three ammo pads sit on the atrium landmarks
 
 Armor absorption is the damage rule a WISP-4 bolt, a UNIT-7 stun blast, and a flechette into an enforcer all call. For damage D and armor A, wanted is floor(D·2/3), armor takes min(A, wanted), and HP loses max(1, D − absorbed). The player starts at 0 armor. HP at 0 is death: the fight stops damaging the player and the recap takes over. The HUD shows HP, ARMOR, and AMMO while playing.
 
+## Hit feedback
+
+A flechette that hits an enemy flashes a white-cyan X on the crosshair for 80 ms, and the drone or enforcer itself flashes white-cyan for 60 ms. A killing blow uses a larger magenta X. Damage taken by the player draws a red arc on the screen edge toward the shot. The arc fades over 400 ms. At most three arcs are kept, and their opacities are scaled so a burst cannot cover the view. Each Quill shot adds a small viewmodel kick. Walking adds a slight bob and strafing a slight lean. Those offsets stay within about two centimeters and three degrees, so the carbine stays in the frame. The 0.12° aim punch is unchanged. None of this is written to storage.
+
 ## WISP-4
 
 The early release ships two enemies. The WISP-4 is a rogue security drone. Wave 1 spawns two, already hostile, at least 8 m from the player and clear of the hulls. Each is a low-poly hovering disc with cyan running lights and a visor slit that is red while it is aggro. It has 40 HP and no armor. Only VEC-9 flechettes damage it, through the projectile hitbox sweep. There is no hitscan.

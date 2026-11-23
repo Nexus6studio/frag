@@ -17,6 +17,8 @@
 }
 
 #hud[data-mode="dead"] #crosshair,
+#hud[data-mode="dead"] #hitmarker,
+#hud[data-mode="dead"] #damage-arcs,
 #hud[data-mode="dead"] #hud-bar {
   visibility: hidden;
 }
@@ -72,6 +74,73 @@ html[data-cursor="none"] canvas {
 
 .crosshair-e {
   right: 0;
+}
+
+#hitmarker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+#hitmarker[hidden] {
+  display: none;
+}
+
+#hitmarker span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 100%;
+  background: #e7ffff;
+  box-shadow: 0 0 0 1px #07080d;
+}
+
+#hitmarker span:first-child {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+#hitmarker span:last-child {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+#hitmarker[data-kind="kill"] {
+  width: 27px;
+  height: 27px;
+}
+
+#hitmarker[data-kind="kill"] span {
+  background: #ff8ad4;
+  box-shadow:
+    0 0 8px #ff3aa8,
+    0 0 0 1px #07080d;
+}
+
+#damage-arcs {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.damage-arc {
+  position: absolute;
+  width: 18vmin;
+  height: 9vmin;
+  border: 4px solid #ff5a6a;
+  border-bottom: 0;
+  border-radius: 18vmin 18vmin 0 0;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.damage-arc[hidden] {
+  display: none;
 }
 
 #hud-bar {

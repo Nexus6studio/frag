@@ -18,6 +18,7 @@ import {
   enforcerInsideVolume,
 } from "../src/enforcer.ts";
 import { WAVE_GAP_SECONDS } from "../src/waves.ts";
+import { HIT_FLASH_SECONDS } from "../src/feel.ts";
 
 const DT = 1 / 120;
 
@@ -359,4 +360,22 @@ test("the enforcer waits 2 s after start, restart, and each new wave", () => {
   const shotsAtRestart = fight.enforcers.shotCount();
   step(fight, 1.5, ATRIUM_SPAWN);
   assert.equal(fight.enforcers.shotCount(), shotsAtRestart, "restart fired during grace");
+});
+
+test("a hit and a kill flash the enforcer for 60 ms", () => {
+  const sim = createEnforcerSim({
+    hull: openHull(),
+    player: createPlayerState(),
+    hitboxes: createHitboxWorld(),
+  });
+  sim.place(0, { x: 0, y: 0, z: 0 });
+  assert.equal(sim.units[0].hitFlash, 0);
+  sim.hurt(0, 9);
+  assert.equal(sim.units[0].alive, true);
+  assert.equal(sim.units[0].hitFlash, HIT_FLASH_SECONDS);
+  sim.tickFlash(0.03);
+  assert.ok(Math.abs(sim.units[0].hitFlash - (HIT_FLASH_SECONDS - 0.03)) < 1e-9);
+  sim.hurt(0, ENFORCER_HP + ENFORCER_ARMOR);
+  assert.equal(sim.units[0].alive, false);
+  assert.equal(sim.units[0].hitFlash, HIT_FLASH_SECONDS);
 });
