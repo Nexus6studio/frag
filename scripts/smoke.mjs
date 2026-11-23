@@ -1280,24 +1280,28 @@ async function assertThrottledFire(browser, errors) {
       undefined,
       { timeout: 3_000, polling: 50 },
     );
-    // One click per throttled frame. The frame cap is 200 ms, so the clicks
-    // are at least 125 ms apart, and each one has to become its own shot.
+    // One click per simulated frame. The rAF cap is 200 ms, so the clicks
+    // stay at least 125 ms of sim time apart. A software-GL frame can block
+    // the page for longer than 2 s of wall time, so the deadline is generous
+    // and the condition is the sim clock, not a fixed sleep.
     const clicks = 8;
-    let expected = burstBefore.shots;
     for (let i = 0; i < clicks; i += 1) {
-      expected += 1;
-      await page.evaluate(() => {
+      const mark = await page.evaluate(() => {
         window.dispatchEvent(new MouseEvent("mousedown", { button: 0, buttons: 1, bubbles: true }));
         window.dispatchEvent(new MouseEvent("mouseup", { button: 0, buttons: 0, bubbles: true }));
+        const canvas = document.querySelector("canvas");
+        const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+        return { frames: sim?.frames ?? -1, sim: sim?.sim ?? -1 };
       });
       await page.waitForFunction(
-        (target) => {
+        (seen) => {
           const canvas = document.querySelector("canvas");
-          const shots = canvas instanceof HTMLCanvasElement ? canvas.fragSim?.shots : null;
-          return typeof shots === "number" && shots >= target;
+          const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+          if (!sim || typeof sim.frames !== "number" || typeof sim.sim !== "number") return false;
+          return sim.frames > seen.frames && sim.sim > seen.sim;
         },
-        expected,
-        { timeout: 2_000, polling: 50 },
+        mark,
+        { timeout: 15_000, polling: 50 },
       );
     }
     const burstAfter = await readFire(page);
