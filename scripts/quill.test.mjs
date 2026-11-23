@@ -22,6 +22,10 @@ function command(fire, reload, direction = forward) {
   return { fire, reload, origin, direction };
 }
 
+function paced(fire, presses, reload = false) {
+  return { fire, presses, reload, origin, direction: forward };
+}
+
 function fresh() {
   return createQuill({ hitboxes: createHitboxWorld() });
 }
@@ -460,4 +464,111 @@ test("the hud ammo readout follows mag and reserve", () => {
   assert.equal(player.get().mag, 40);
   assert.equal(player.get().reserve, 39);
   assert.equal(hudReadout(player.get(), "playing").ammo, "40+39");
+});
+
+test("8 presses spaced 250 ms apart at 5 fps fire 8 shots", () => {
+  const quill = fresh();
+  const frame = 1 / 5;
+  const spacing = 0.25;
+  let time = 0;
+  let sent = 0;
+  while (time < 8 * spacing - 1e-9) {
+    let presses = 0;
+    const end = time + frame;
+    while (sent < 8 && sent * spacing < end - 1e-12) {
+      presses += 1;
+      sent += 1;
+    }
+    quill.update(frame, paced(false, presses));
+    time = end;
+  }
+  assert.equal(sent, 8);
+  assert.equal(quill.shotsFired, 8);
+});
+
+test("20 presses inside 1 s give at most 8 shots", () => {
+  const quill = fresh();
+  const frame = 1 / 5;
+  const spacing = 1 / 20;
+  let time = 0;
+  let sent = 0;
+  while (time < 1 - 1e-9) {
+    let presses = 0;
+    const end = time + frame;
+    while (sent < 20 && sent * spacing < end - 1e-12) {
+      presses += 1;
+      sent += 1;
+    }
+    quill.update(frame, paced(false, presses));
+    time = end;
+  }
+  assert.equal(sent, 20);
+  console.log(`20 presses in 1 s fired ${quill.shotsFired}`);
+  assert.ok(quill.shotsFired <= 8, `fired ${quill.shotsFired}`);
+  assert.ok(quill.shotsFired >= 1, "the burst produced no shots");
+  for (let i = 1; i < quill.shotsFired; i += 1) {
+    const gap = quill.shotTime(i) - quill.shotTime(i - 1);
+    assert.ok(gap >= QUILL_INTERVAL - 1e-6, `shots ${i - 1} and ${i} are ${gap} s apart`);
+  }
+});
+
+test("a burst of presses in one frame does not become a backlog", () => {
+  const quill = fresh();
+  quill.update(0.2, paced(false, 10));
+  const mid = quill.shotsFired;
+  assert.ok(mid <= 2, `200 ms burst fired ${mid}`);
+  assert.ok(mid >= 1, "a ready burst fired nothing");
+  quill.update(0.5, paced(false, 0));
+  assert.equal(quill.shotsFired, mid, "unused presses fired on the next frame");
+});
+
+test("a press during reload or an empty magazine does not fire afterward", () => {
+  const reloading = fresh();
+  reloading.update(0, paced(false, 1));
+  assert.equal(reloading.shotsFired, 1);
+  reloading.update(0, paced(false, 0, true));
+  assert.equal(reloading.reloading, true);
+  const blocked = reloading.shotsFired;
+  reloading.update(0.2, paced(false, 3));
+  assert.equal(reloading.shotsFired, blocked, "a click fired during reload");
+  let t = 0.2;
+  while (reloading.reloading && t < 3) {
+    reloading.update(0.2, paced(false, 0));
+    t += 0.2;
+  }
+  assert.equal(reloading.reloading, false);
+  assert.equal(reloading.shotsFired, blocked, "the reload click fired after the reload");
+  reloading.update(0.2, paced(false, 0));
+  assert.equal(reloading.shotsFired, blocked);
+
+  const dry = fresh();
+  let guard = 0;
+  while ((dry.mag > 0 || dry.reserve > 0 || dry.reloading) && guard < 20000) {
+    dry.update(1 / 120, command(true, false));
+    guard += 1;
+  }
+  assert.equal(dry.mag, 0);
+  assert.equal(dry.reserve, 0);
+  assert.equal(dry.reloading, false);
+  const stuck = dry.shotsFired;
+  dry.update(0.2, paced(false, 4));
+  dry.update(1, paced(false, 0));
+  assert.equal(dry.shotsFired, stuck, "an empty click fired once rounds were still gone");
+});
+
+test("held fire stays at 8.000 shots/s at 5, 30, and 120 fps", () => {
+  for (const fps of [5, 30, 120]) {
+    const dt = 1 / fps;
+    const quill = fresh();
+    let guard = 0;
+    while (quill.mag > 0 && guard < 20000) {
+      quill.update(dt, paced(true, 0));
+      guard += 1;
+    }
+    assert.equal(quill.shotsFired, 40, `${fps} fps emptied a different number of rounds`);
+    const span = quill.shotTime(39) - quill.shotTime(0);
+    const rate = 39 / span;
+    console.log(`held quill ${fps} fps: ${rate.toFixed(3)} shots/s over ${span.toFixed(5)} s`);
+    assert.ok(Math.abs(rate - 8) < 1e-9, `${fps} fps rate ${rate}`);
+  }
 });

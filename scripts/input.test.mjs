@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHitboxWorld } from "../src/hitbox.ts";
+import { RECAP_ARM_SECONDS } from "../src/hud/model.ts";
 import {
   actionForCode,
   armLatch,
@@ -7,10 +9,12 @@ import {
   buttonState,
   buttonsFromCodes,
   clearLatch,
+  createInput,
   createLatch,
   latchTransition,
   takeLatch,
 } from "../src/input.ts";
+import { createQuill } from "../src/quill.ts";
 
 const CODES = {
   KeyW: "forward",
@@ -130,4 +134,134 @@ test("debug stays down while either Backquote or F1 is held", () => {
   assert.equal(buttonsFromCodes(["F1"], false).debug, true);
   assert.equal(buttonsFromCodes(["Backquote", "F1"], false).debug, true);
   assert.equal(buttonsFromCodes(["KeyW"], false).debug, false);
+});
+
+test("latched clicks survive a slow frame and clear on pause, death, and restart", () => {
+  const listeners = [];
+  const documentListeners = [];
+  const canvas = {};
+  const doc = {
+    pointerLockElement: canvas,
+    addEventListener(type, fn) {
+      documentListeners.push({ type, fn });
+    },
+  };
+  const win = {
+    addEventListener(type, fn) {
+      listeners.push({ type, fn });
+    },
+  };
+  globalThis.document = doc;
+  globalThis.window = win;
+
+  const input = createInput(canvas);
+  const quill = createQuill({ hitboxes: createHitboxWorld() });
+  const origin = { x: 0, y: 0, z: 0 };
+  const direction = { x: 0, y: 0, z: -1 };
+  const fireDown = listeners.filter((row) => row.type === "mousedown");
+  assert.equal(fireDown.length, 1, "game window mousedown listeners");
+  assert.equal(fireDown[0].fn.fragRole, "fire");
+
+  const dispatch = (type) => {
+    const event = { button: 0, preventDefault() {} };
+    for (const row of listeners) if (row.type === type) row.fn(event);
+  };
+  const click = () => {
+    dispatch("mousedown");
+    dispatch("mouseup");
+  };
+  const step = (dt, { captured = true, living = true } = {}) => {
+    if (!living) input.discard();
+    const controls = input.sample(captured);
+    if (captured && living) {
+      quill.update(dt, {
+        fire: controls.down.fire,
+        presses: controls.firePresses,
+        reload: false,
+        origin,
+        direction,
+      });
+    }
+    return controls;
+  };
+
+  // Arm while the pointer is locked, the same way the first playing frame does.
+  const armed = step(0);
+  assert.equal(armed.firePresses, 0);
+  assert.equal(armed.down.fire, false);
+
+  click();
+  const tapped = input.sample(true);
+  assert.equal(tapped.down.fire, false, "a finished click was still held");
+  assert.equal(tapped.firePresses, 1, "a click between samples was dropped");
+  assert.equal(tapped.pressed.fire, true);
+  quill.update(0.2, {
+    fire: tapped.down.fire,
+    presses: tapped.firePresses,
+    reload: false,
+    origin,
+    direction,
+  });
+  assert.equal(quill.shotsFired, 1, "the latched click did not fire");
+  const next = input.sample(true);
+  assert.equal(next.firePresses, 0, "the latch survived the sample that read it");
+
+  click();
+  click();
+  click();
+  const burst = input.sample(true);
+  assert.equal(burst.firePresses, 3, "a slow frame collapsed three clicks");
+  assert.equal(burst.down.fire, false);
+
+  // Pause consumes the latch instead of turning it into a shot after resume.
+  const beforePause = quill.shotsFired;
+  click();
+  const paused = step(0.2, { captured: false });
+  assert.equal(paused.firePresses, 0);
+  assert.equal(paused.down.fire, false);
+  click();
+  const resumed = step(0.2, { captured: true });
+  assert.equal(resumed.firePresses, 0, "a click during pause was still latched");
+  assert.equal(quill.shotsFired, beforePause, "pause produced a shot");
+
+  // The recap ignores input for RECAP_ARM_SECONDS. The player is dead then,
+  // and the restart click itself is discarded.
+  assert.equal(RECAP_ARM_SECONDS, 1);
+  const beforeDeath = quill.shotsFired;
+  click();
+  const dead = step(RECAP_ARM_SECONDS, { living: false });
+  assert.equal(dead.firePresses, 0, "a recap click stayed latched");
+  input.discard();
+  const revived = step(0.2, { living: true });
+  assert.equal(revived.firePresses, 0, "restart kept the recap click");
+  assert.equal(quill.shotsFired, beforeDeath, "the recap click fired after restart");
+
+  // Eight clicks, 250 ms apart, sampled at 5 fps.
+  const fresh = createQuill({ hitboxes: createHitboxWorld() });
+  const frame = 1 / 5;
+  const spacing = 0.25;
+  let time = 0;
+  let sent = 0;
+  while (time < 8 * spacing - 1e-9) {
+    const end = time + frame;
+    let presses = 0;
+    while (sent < 8 && sent * spacing < end - 1e-12) {
+      click();
+      presses += 1;
+      sent += 1;
+    }
+    const controls = input.sample(true);
+    assert.equal(controls.firePresses, presses, `frame at ${time} s`);
+    assert.equal(controls.down.fire, false);
+    fresh.update(frame, {
+      fire: controls.down.fire,
+      presses: controls.firePresses,
+      reload: false,
+      origin,
+      direction,
+    });
+    time = end;
+  }
+  assert.equal(sent, 8);
+  assert.equal(fresh.shotsFired, 8, `5 fps clicks fired ${fresh.shotsFired}`);
 });

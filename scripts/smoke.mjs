@@ -1271,17 +1271,43 @@ async function assertThrottledFire(browser, errors) {
       errors.push(`fire listeners grew after pointer re-lock (${after.mouseDown} -> ${relocked.mouseDown})`);
     }
     const burstBefore = relocked;
-    for (let i = 0; i < 8; i += 1) {
-      await page.mouse.down();
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      await page.mouse.up();
-      await new Promise((resolve) => setTimeout(resolve, 70));
+    await page.waitForFunction(
+      () => {
+        const canvas = document.querySelector("canvas");
+        const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+        return sim != null && sim.reloading === false && sim.mag > 0;
+      },
+      undefined,
+      { timeout: 3_000, polling: 50 },
+    );
+    // One click per throttled frame. The frame cap is 200 ms, so the clicks
+    // are at least 125 ms apart, and each one has to become its own shot.
+    const clicks = 8;
+    let expected = burstBefore.shots;
+    for (let i = 0; i < clicks; i += 1) {
+      expected += 1;
+      await page.evaluate(() => {
+        window.dispatchEvent(new MouseEvent("mousedown", { button: 0, buttons: 1, bubbles: true }));
+        window.dispatchEvent(new MouseEvent("mouseup", { button: 0, buttons: 0, bubbles: true }));
+      });
+      await page.waitForFunction(
+        (target) => {
+          const canvas = document.querySelector("canvas");
+          const shots = canvas instanceof HTMLCanvasElement ? canvas.fragSim?.shots : null;
+          return typeof shots === "number" && shots >= target;
+        },
+        expected,
+        { timeout: 2_000, polling: 50 },
+      );
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
     const burstAfter = await readFire(page);
     const burstShots = burstAfter.shots - burstBefore.shots;
-    console.log(`throttled bursts: ${burstShots} shots from 8 clicks, ammo ${burstAfter.ammo}`);
-    if (burstShots > 12) errors.push(`8 clicks fired ${burstShots} shots`);
+    console.log(
+      `throttled bursts: ${burstShots} shots from ${clicks} clicks spaced >=125 ms apart, ammo ${burstAfter.ammo}`,
+    );
+    if (burstShots !== clicks) {
+      errors.push(`${clicks} clicks spaced >=125 ms apart fired ${burstShots} shots`);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`throttled fire probe failed: ${message}`);

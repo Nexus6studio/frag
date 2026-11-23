@@ -96,6 +96,8 @@ const wisps = createWispSim({ hull, player, hitboxes: playerHitboxes, origin: AT
 const wispView = mountWispView(scene, wisps, camera);
 
 function restartRun(): void {
+  // The click that leaves the recap is not a shot on the next frame.
+  input.discard();
   restartCombat({
     player,
     quill,
@@ -118,7 +120,7 @@ const hud = mountHud(player, {
 });
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
-const quillCommand = { fire: false, reload: false, origin: muzzle, direction: aim };
+const quillCommand = { fire: false, presses: 0, reload: false, origin: muzzle, direction: aim };
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -268,8 +270,11 @@ function frame(time: number): void {
   simFrames += 1;
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
-  const controls = input.sample(captured);
   const living = player.get().hp > 0;
+  // Dead, including the recap's first second, drops a click so it cannot fire
+  // after the restart. Pause takes the same path through sample(false).
+  if (!living) input.discard();
+  const controls = input.sample(captured);
   if (captured && living) {
     look.apply(controls.lookX, controls.lookY);
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
@@ -287,7 +292,9 @@ function frame(time: number): void {
   if (captured && living) {
     aimDirection(look.yaw, look.pitch, aim);
     muzzleOrigin(camera.position, aim, muzzle);
+    // `firePresses` is the clicks that already went up. Held fire stays on `down`.
     quillCommand.fire = controls.down.fire;
+    quillCommand.presses = controls.firePresses;
     quillCommand.reload = controls.pressed.reload;
     quill.update(simDt, quillCommand);
     wisps.update(simDt, body.position);

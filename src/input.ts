@@ -1,11 +1,15 @@
 // Control-table input, sampled once per frame.
 //
 // Edges are latched on the events themselves, so a tap that starts and ends
-// between two frames is still `pressed` and `released`. `sample(true)` while
-// the pointer is locked and play is active. A false sample (paused or
-// unlocked) returns an empty state: edges are cleared, not turned into
-// releases, and look deltas are dropped. Capturing again adopts keys that
-// are already held as `down` without a new `pressed`.
+// between two frames is still `pressed` and `released`. Left click also
+// keeps a count. Several clicks can land before the next sample, and a click
+// that is already up still counts. `sample` reads that count and clears it.
+// `sample(true)` while the pointer is locked and play is active. A false
+// sample (paused or unlocked) returns an empty state: edges are cleared, not
+// turned into releases, the click count is dropped, and look deltas are
+// dropped. Capturing again adopts keys that are already held as `down`
+// without a new `pressed`. Death and restart call `discard` so a click from
+// those gates cannot fire once play resumes.
 
 export const ACTIONS = [
   "forward",
@@ -33,6 +37,12 @@ export interface InputState {
   lookX: number;
   /** Pointer-lock `movementY` since the previous sample. Positive is down. */
   lookY: number;
+  /**
+   * Left clicks since the previous sample. A tap that ended already still
+   * counts, and a slow frame can hold more than one. Zero after a pause,
+   * an unlock, `discard`, or the sample that read it.
+   */
+  firePresses: number;
 }
 
 const KEY_ACTIONS: Readonly<Record<string, Action>> = {
@@ -108,6 +118,7 @@ export function emptyInput(): InputState {
     released: buttonState(),
     lookX: 0,
     lookY: 0,
+    firePresses: 0,
   };
 }
 
@@ -146,6 +157,7 @@ export function takeLatch(latch: InputLatch, lookX = 0, lookY = 0): InputState {
     released: { ...latch.released },
     lookX,
     lookY,
+    firePresses: 0,
   };
   for (const action of ACTIONS) {
     latch.pressed[action] = false;
@@ -159,9 +171,12 @@ export function createInput(
   hooks?: { onPointerDown?: () => void; onPointerUp?: () => void },
 ): {
   sample(captured: boolean): InputState;
+  /** Drop latched clicks. Death and restart call this; pause drops them too. */
+  discard(): void;
 } {
   const held = new Set<string>();
   let fire = false;
+  let firePresses = 0;
   let lookX = 0;
   let lookY = 0;
   let armed = false;
@@ -183,6 +198,7 @@ export function createInput(
 
   function disarm(): void {
     clearLatch(latch);
+    firePresses = 0;
     armed = false;
     lookX = 0;
     lookY = 0;
@@ -205,6 +221,9 @@ export function createInput(
   function onMouseDown(event: MouseEvent): void {
     if (event.button !== 0) return;
     fire = true;
+    // Count only while play owns the pointer. A click on the pause overlay
+    // or the recap is not a shot, and `discard` / disarm drop any that slipped in.
+    if (armed && locked()) firePresses += 1;
     sync();
     hooks?.onPointerDown?.();
   }
@@ -261,6 +280,7 @@ export function createInput(
         copyButtons(state.released, latch.released);
         state.lookX = 0;
         state.lookY = 0;
+        state.firePresses = 0;
         return state;
       }
       if (!armed) {
@@ -273,7 +293,12 @@ export function createInput(
       copyButtons(state.released, frame.released);
       state.lookX = frame.lookX;
       state.lookY = frame.lookY;
+      state.firePresses = firePresses;
+      firePresses = 0;
       return state;
+    },
+    discard(): void {
+      firePresses = 0;
     },
   };
 }
