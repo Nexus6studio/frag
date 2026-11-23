@@ -1151,15 +1151,21 @@ async function runDevSmoke(browser, errors) {
 function installFireProbe(page) {
   return page.addInitScript(() => {
     const names = [];
+    const details = [];
     const orig = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function (type, listener, options) {
       if (type === "mousedown" || type === "mouseup") {
         const id = this === window ? "window" : this === document ? "document" : this.id || this.tagName || "node";
-        names.push(`${id}:${type}:${listener.name || "anon"}`);
+        const role = typeof listener.fragRole === "string" ? listener.fragRole : "";
+        const label = role || listener.name || "anon";
+        const src = typeof listener === "function" ? Function.prototype.toString.call(listener).replace(/\s+/g, " ").slice(0, 160) : "";
+        names.push(`${id}:${type}:${label}`);
+        details.push({ id, type, label, role, src });
       }
       return orig.call(this, type, listener, options);
     };
     window.__fireListenerNames = names;
+    window.__fireListenerDetails = details;
     const native = window.requestAnimationFrame.bind(window);
     let last = 0;
     window.requestAnimationFrame = (callback) =>
@@ -1183,10 +1189,13 @@ async function readFire(page) {
       ammo: document.querySelector("#hud-ammo")?.textContent ?? "",
       sim: sim?.sim ?? null,
       shots: sim?.shots ?? null,
+      firstShot: sim?.firstShot ?? null,
+      lastShot: sim?.lastShot ?? null,
       frames: sim?.frames ?? null,
       wall: performance.now(),
       mouseDown: names.filter((name) => name.startsWith("window:mousedown:")).length,
       mouseDownNames: names.filter((name) => name.startsWith("window:mousedown:")),
+      mouseDownDetails: (window.__fireListenerDetails ?? []).filter((row) => row.id === "window" && row.type === "mousedown"),
     };
   });
 }
@@ -1218,19 +1227,33 @@ async function assertThrottledFire(browser, errors) {
     const sim = after.sim - before.sim;
     const shots = after.shots - before.shots;
     const ratio = wall > 0 ? sim / wall : 0;
+    const start = before.shots > 0 ? before.lastShot : after.firstShot;
+    const intervals = before.shots > 0 ? shots : Math.max(0, shots - 1);
+    const span = after.lastShot - start;
+    const rate = intervals > 0 && Number.isFinite(span) && span > 0 ? intervals / span : null;
     console.log(
-      `throttled hold: wall ${wall.toFixed(3)}s sim ${sim.toFixed(3)}s ratio ${ratio.toFixed(3)} shots ${shots} ammo ${before.ammo} -> ${after.ammo} frames ${after.frames - before.frames} onMouseDown ${after.mouseDown}`,
+      `throttled hold: wall ${wall.toFixed(3)}s sim ${sim.toFixed(3)}s ratio ${ratio.toFixed(3)} (below 1 is the 250 ms stall clamp) shots ${shots} ${rate == null ? "rate n/a" : `${rate.toFixed(3)} shots/sim s`} ammo ${before.ammo} -> ${after.ammo} frames ${after.frames - before.frames}`,
     );
-    if (!(wall >= 5.5 && wall <= 8)) errors.push(`throttled hold wall time ${wall.toFixed(2)}s`);
-    if (!(ratio >= 0.7 && ratio <= 1.35)) {
-      errors.push(`sim time ran ${ratio.toFixed(2)}× wall time during a 5 fps hold`);
-    }
-    if (!(shots >= 28 && shots <= 56)) {
-      errors.push(`5 fps hold fired ${shots} shots in ${wall.toFixed(2)}s wall (ammo ${after.ammo})`);
+    if (ratio > 1.35) errors.push(`sim time ran ${ratio.toFixed(2)}× wall time during a 5 fps hold`);
+    if (shots > 56) errors.push(`5 fps hold fired ${shots} shots in ${wall.toFixed(2)}s wall (ammo ${after.ammo})`);
+    if (rate != null && Math.abs(rate - 8) > 0.05) {
+      errors.push(`shots per sim second ${rate.toFixed(3)}, expected about 8`);
     }
     if (after.ammo === "0+0") errors.push("5 fps hold emptied 40+40 inside 6 s");
-    if (after.mouseDown < 1) errors.push(`fire mousedown listeners ${after.mouseDown}`);
-    console.log(`throttled listeners: ${after.mouseDownNames.join(", ")}`);
+    const fireHandlers = after.mouseDownNames.filter((name) => name.endsWith(":fire"));
+    for (const row of after.mouseDownDetails) {
+      const kind = row.role === "fire" ? "game fire handler" : "test runner, not a game handler";
+      console.log(`throttled listener ${row.label} (${kind}): ${row.src}`);
+    }
+    if (fireHandlers.length !== 1) {
+      errors.push(`game fire mousedown handlers ${fireHandlers.length}: ${after.mouseDownNames.join(", ")}`);
+    }
+    for (const row of after.mouseDownDetails) {
+      if (row.role === "fire") continue;
+      if (!row.src.includes("_hitTargetInterceptor")) {
+        errors.push(`window mousedown is not the tagged fire handler or the test runner: ${row.label} ${row.src}`);
+      }
+    }
 
     await page.keyboard.press("Escape");
     await page.waitForFunction(

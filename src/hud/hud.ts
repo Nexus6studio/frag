@@ -5,7 +5,12 @@ import { acceptRestartClick, bindHud, deathRecapText, recapAcceptsInput, type Hu
 
 export function mountHud(
   player: PlayerStore,
-  hooks?: { onRestart?: () => void; getRecap?: () => DeathRecap },
+  hooks?: {
+    onRestart?: () => void;
+    getRecap?: () => DeathRecap;
+    /** One window mousedown already exists for fire. Death tracking uses that. */
+    trackPointer?: (down: () => void, up: () => void) => void;
+  },
 ): { setWave(wave: number): void } {
   const root = document.createElement("div");
   root.id = "hud";
@@ -117,20 +122,14 @@ export function mountHud(
     else player.restart();
   };
 
-  window.addEventListener(
-    "mousedown",
+  hooks?.trackPointer?.(
     () => {
       pointerDown = true;
       if (armed()) heldThroughDeath = false;
     },
-    true,
-  );
-  window.addEventListener(
-    "mouseup",
     () => {
       pointerDown = false;
     },
-    true,
   );
   window.addEventListener(
     "click",

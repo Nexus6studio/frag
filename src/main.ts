@@ -53,7 +53,12 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 const shell = mountShell(renderer.domElement);
-const input = createInput(renderer.domElement);
+let onPointerDown = (): void => {};
+let onPointerUp = (): void => {};
+const input = createInput(renderer.domElement, {
+  onPointerDown: () => onPointerDown(),
+  onPointerUp: () => onPointerUp(),
+});
 const player = createPlayerState();
 
 const hull = createAtriumHull();
@@ -106,6 +111,10 @@ function restartRun(): void {
 const hud = mountHud(player, {
   onRestart: restartRun,
   getRecap: () => wisps.recap(),
+  trackPointer(down, up) {
+    onPointerDown = down;
+    onPointerUp = up;
+  },
 });
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
@@ -222,6 +231,8 @@ Object.defineProperty(renderer.domElement, "fragSim", {
       frames: simFrames,
       frameDt: lastSimDt,
       shots: quill.shotsFired,
+      firstShot: quill.shotsFired > 0 ? quill.shotTime(0) : null,
+      lastShot: quill.shotsFired > 0 ? quill.shotTime(quill.shotsFired - 1) : null,
       mag: quill.mag,
       reserve: quill.reserve,
       reloading: quill.reloading,
