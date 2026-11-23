@@ -4,12 +4,13 @@
 // between two frames is still `pressed` and `released`. Left click also
 // keeps a count. Several clicks can land before the next sample, and a click
 // that is already up still counts. `sample` reads that count and clears it.
-// `sample(true)` while the pointer is locked and play is active. A false
-// sample (paused or unlocked) returns an empty state: edges are cleared, not
-// turned into releases, the click count is dropped, and look deltas are
-// dropped. Capturing again adopts keys that are already held as `down`
-// without a new `pressed`. Death and restart call `discard` so a click from
-// those gates cannot fire once play resumes.
+// `sample(true)` while play is active, with or without the pointer lock.
+// Mouse-look deltas are reported only while the pointer is locked. A false
+// sample (warning, click-to-play, pause, or death) returns an empty state:
+// edges are cleared, not turned into releases, the click count is dropped,
+// and look deltas are dropped. Sampling again adopts keys that are already
+// held as `down` without a new `pressed`. Death and restart call `discard`
+// so a click from those gates cannot fire once play resumes.
 
 export const ACTIONS = [
   "forward",
@@ -194,7 +195,7 @@ export function createInput(
   }
 
   function sync(): void {
-    if (!armed || !locked()) return;
+    if (!armed) return;
     latchTransition(latch, physical());
   }
 
@@ -211,7 +212,7 @@ export function createInput(
     if (actionForCode(event.code) === null) return;
     held.add(event.code);
     // Space would scroll the page. The shell already handles Esc and the debug keys.
-    if (event.code === "Space" && locked()) event.preventDefault();
+    if (event.code === "Space" && (armed || locked())) event.preventDefault();
     sync();
   }
 
@@ -220,12 +221,21 @@ export function createInput(
     sync();
   }
 
+  function phaseAllowsFire(): boolean {
+    if (typeof document.querySelector !== "function") return true;
+    const shell = document.querySelector("#app-shell");
+    if (!shell) return true;
+    return shell.getAttribute("data-phase") === "playing";
+  }
+
   function onMouseDown(event: MouseEvent): void {
     if (event.button !== 0) return;
     fire = true;
-    // Count only while play owns the pointer. A click on the pause overlay
-    // or the recap is not a shot, and `discard` / disarm drop any that slipped in.
-    if (armed && locked()) firePresses += 1;
+    // One mousedown is one press. Pause and the warning are not play, so the
+    // resume click is not a shot. Without the lock, only a canvas click counts,
+    // and that same click is what asks for the pointer again.
+    const owned = locked() || event.target === canvas;
+    if (armed && phaseAllowsFire() && owned) firePresses += 1;
     sync();
     hooks?.onPointerDown?.();
   }
@@ -293,7 +303,7 @@ export function createInput(
         armLatch(latch, physical());
         armed = true;
       }
-      const frame = takeLatch(latch, dx, dy);
+      const frame = takeLatch(latch, locked() ? dx : 0, locked() ? dy : 0);
       copyButtons(state.down, frame.down);
       copyButtons(state.pressed, frame.pressed);
       copyButtons(state.released, frame.released);

@@ -265,3 +265,55 @@ test("latched clicks survive a slow frame and clear on pause, death, and restart
   assert.equal(sent, 8);
   assert.equal(fresh.shotsFired, 8, `5 fps clicks fired ${fresh.shotsFired}`);
 });
+
+test("play without pointer lock latches keys and a single canvas click", () => {
+  const listeners = [];
+  const canvas = {};
+  let phase = "playing";
+  const shell = {
+    getAttribute(name) {
+      return name === "data-phase" ? phase : null;
+    },
+  };
+  globalThis.document = {
+    pointerLockElement: null,
+    addEventListener() {},
+    querySelector(selector) {
+      return selector === "#app-shell" ? shell : null;
+    },
+  };
+  globalThis.window = {
+    addEventListener(type, fn) {
+      listeners.push({ type, fn });
+    },
+  };
+  const input = createInput(canvas);
+  const dispatch = (type, event) => {
+    for (const row of listeners) if (row.type === type) row.fn(event);
+  };
+
+  input.sample(true);
+  dispatch("keydown", { code: "KeyW", repeat: false, preventDefault() {} });
+  dispatch("keydown", { code: "KeyR", repeat: false, preventDefault() {} });
+  const moving = input.sample(true);
+  assert.equal(moving.down.forward, true);
+  assert.equal(moving.pressed.reload, true);
+  assert.equal(moving.lookX, 0);
+  dispatch("keyup", { code: "KeyW" });
+  dispatch("keyup", { code: "KeyR" });
+
+  dispatch("mousedown", { button: 0, target: canvas });
+  dispatch("mouseup", { button: 0, target: canvas });
+  const shot = input.sample(true);
+  assert.equal(shot.firePresses, 1, "unlocked canvas click was dropped or doubled");
+  assert.equal(shot.down.fire, false);
+
+  phase = "paused";
+  dispatch("mousedown", { button: 0, target: canvas });
+  dispatch("mouseup", { button: 0, target: canvas });
+  const paused = input.sample(false);
+  assert.equal(paused.firePresses, 0, "a resume click stayed latched");
+  phase = "playing";
+  const resumed = input.sample(true);
+  assert.equal(resumed.firePresses, 0, "resume turned the pause click into a shot");
+});
