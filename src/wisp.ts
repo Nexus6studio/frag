@@ -54,6 +54,8 @@ export const WISP_BURST_GAP = 1.8;
 export const WISP_TELEGRAPH = 0.3;
 /** Quiet gap after the second bolt. The telegraph fills the rest of the burst gap. */
 export const WISP_RECOVER = WISP_BURST_GAP - WISP_TELEGRAPH;
+/** Wave 1 only. Smallest hundredth of a second that keeps an idle player alive through 15 s. Later waves keep WISP_BURST_GAP. */
+export const WISP_WAVE1_BURST_GAP = 2.78;
 export const WISP_BOLT_LIFE = 3;
 export const WISP_BOLT_CAP = 8;
 
@@ -79,15 +81,15 @@ export type WispPhase = "grace" | "telegraph" | "intra" | "recover";
 
 /** Quiet start on wave 2 and later. Wave 1 uses WISP_WAVE1_SPAWN_GRACE. */
 export const WISP_SPAWN_GRACE = 2;
-/**
- * Wave 1 onboarding. Later waves keep WISP_SPAWN_GRACE.
- * 3 s still kills an idle player at 11.6 s at 120 Hz. 9 s is the shortest
- * whole second that leaves HP above 0 through 15 s.
- */
-export const WISP_WAVE1_SPAWN_GRACE = 9;
+/** Wave 1 onboarding. Later waves keep WISP_SPAWN_GRACE. */
+export const WISP_WAVE1_SPAWN_GRACE = 3;
 
 export function wispSpawnGrace(wave: number): number {
   return wave <= 1 ? WISP_WAVE1_SPAWN_GRACE : WISP_SPAWN_GRACE;
+}
+
+export function wispBurstGap(wave: number): number {
+  return wave <= 1 ? WISP_WAVE1_BURST_GAP : WISP_BURST_GAP;
 }
 
 export interface WispDrone {
@@ -434,18 +436,21 @@ export function createWispSim(options: WispOptions): WispSim {
 
   function soonest(): number {
     const grace = wispSpawnGrace(director.wave);
+    const burst = wispBurstGap(director.wave);
     let need = Infinity;
     for (let i = 0; i < drones.length; i += 1) {
       const drone = drones[i]!;
       if (!drone.alive) continue;
-      const left = phaseDuration(drone.phase, grace) - drone.timer;
+      const left = phaseDuration(drone.phase, grace, burst) - drone.timer;
       if (left < need) need = left;
     }
     return need;
   }
 
   function due(drone: Drone): boolean {
-    return drone.alive && drone.timer >= phaseDuration(drone.phase, wispSpawnGrace(director.wave)) - 1e-8;
+    const grace = wispSpawnGrace(director.wave);
+    const burst = wispBurstGap(director.wave);
+    return drone.alive && drone.timer >= phaseDuration(drone.phase, grace, burst) - 1e-8;
   }
 
   function moveDrone(drone: Drone, dt: number): void {
@@ -952,11 +957,11 @@ function makePool(count: number): WispParticle[] {
   return pool;
 }
 
-function phaseDuration(phase: WispPhase, grace: number): number {
+function phaseDuration(phase: WispPhase, grace: number, burstGap: number): number {
   if (phase === "grace") return grace;
   if (phase === "telegraph") return WISP_TELEGRAPH;
   if (phase === "intra") return WISP_BOLT_GAP;
-  return WISP_RECOVER;
+  return burstGap - WISP_TELEGRAPH;
 }
 
 function emitKind(

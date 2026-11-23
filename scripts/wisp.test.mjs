@@ -16,6 +16,7 @@ import {
   WISP_BOLT_SPEED,
   WISP_SPAWN_GRACE,
   WISP_WAVE1_SPAWN_GRACE,
+  WISP_WAVE1_BURST_GAP,
   WISP_BURST_GAP,
   WISP_CLOSE,
   WISP_COUNT,
@@ -189,10 +190,10 @@ test("each bolt deals 8 and a hull stops the shot", () => {
   assert.equal(blocked.get().hp, 100, "a bolt passed the hull");
 });
 
-test("telegraph leads every burst, bolts are 0.15 s apart, and bursts are 1.8 s apart", () => {
+test("telegraph leads every burst, bolts are 0.15 s apart, and bursts use the wave gap", () => {
   const { sim } = atriumSim();
   const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
-  step(sim, WISP_WAVE1_SPAWN_GRACE + 6, feet);
+  step(sim, WISP_WAVE1_SPAWN_GRACE + 2 * WISP_WAVE1_BURST_GAP + WISP_BOLT_GAP + 1, feet);
   for (const drone of sim.drones) {
     if (!drone.alive) continue;
     const bolts = sim.boltCount(drone.index);
@@ -210,7 +211,7 @@ test("telegraph leads every burst, bolts are 0.15 s apart, and bursts are 1.8 s 
       if (burst + 1 < bursts) {
         const next = sim.boltTime(drone.index, (burst + 1) * 2);
         const gap = next - second;
-        assert.ok(Math.abs(gap - WISP_BURST_GAP) < 1e-4, `burst gap ${gap}`);
+        assert.ok(Math.abs(gap - WISP_WAVE1_BURST_GAP) < 1e-4, `burst gap ${gap}`);
       }
     }
     console.log(
@@ -449,6 +450,15 @@ test("wave 1 drones wait out their spawn grace and later waves keep 2 s, at 120 
       wave2First >= spawnedAt + WISP_SPAWN_GRACE + WISP_TELEGRAPH - 0.02,
       `wave 2 first bolt ${wave2First} spawned at ${spawnedAt}`,
     );
+    while (
+      sim.boltCount(0) < lead + 4 &&
+      sim.time < spawnedAt + WISP_SPAWN_GRACE + 2 * WISP_BURST_GAP + 1
+    ) {
+      sim.update(dt, feet);
+    }
+    assert.ok(sim.boltCount(0) >= lead + 4, `wave 2 lead fired ${sim.boltCount(0) - lead}`);
+    const burst = sim.boltTime(0, lead + 2) - sim.boltTime(0, lead + 1);
+    assert.ok(Math.abs(burst - WISP_BURST_GAP) < 0.02, `wave 2 burst gap ${burst}`);
   }
 });
 
@@ -480,14 +490,14 @@ test("burst cadence holds at 5 fps and two drones stay under the scripted damage
       assert.ok(Math.abs(gap - WISP_BOLT_GAP) < 0.02, `5 fps bolt gap ${gap}`);
       if (i + 2 < bolts) {
         const burst = sim.boltTime(index, i + 2) - sim.boltTime(index, i + 1);
-        assert.ok(Math.abs(burst - WISP_BURST_GAP) < 0.02, `5 fps burst gap ${burst}`);
+        assert.ok(Math.abs(burst - WISP_WAVE1_BURST_GAP) < 0.02, `5 fps burst gap ${burst}`);
       }
     }
   }
   const dealt = 500 - player.get().hp;
   const window = span - WISP_WAVE1_SPAWN_GRACE;
   const perSecond = dealt / window;
-  const scripted = (2 * 2 * WISP_BOLT_DAMAGE) / (WISP_BOLT_GAP + WISP_BURST_GAP);
+  const scripted = (2 * 2 * WISP_BOLT_DAMAGE) / (WISP_BOLT_GAP + WISP_WAVE1_BURST_GAP);
   console.log(
     `wisp worst case ${scripted.toFixed(2)} HP/s if both drones hit every bolt; measured ${perSecond.toFixed(2)} HP/s over ${window.toFixed(1)} s (${dealt} HP)`,
   );

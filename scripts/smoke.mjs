@@ -3,6 +3,12 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
+import {
+  WISP_BOLT_DAMAGE,
+  WISP_BOLT_GAP,
+  WISP_WAVE1_BURST_GAP,
+  WISP_WAVE1_SPAWN_GRACE,
+} from "../src/wisp.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const host = "127.0.0.1";
@@ -1848,36 +1854,34 @@ async function assertStationaryDamage(browser, errors) {
     await page.evaluate(() => {
       window.__graceOk = true;
     });
+    const stationaryUntil = WISP_WAVE1_SPAWN_GRACE + 4 * WISP_WAVE1_BURST_GAP;
     try {
       await page.waitForFunction(
-        () => {
+        ({ grace, until }) => {
           const canvas = document.querySelector("canvas");
           const drones = canvas instanceof HTMLCanvasElement ? canvas.fragDrones : null;
           if (!drones) return false;
-          // Wave 1 spawn grace is WISP_WAVE1_SPAWN_GRACE (9 s).
-          if (drones.time < 9 && (drones.fired !== 0 || drones.enforcerShots !== 0)) window.__graceOk = false;
-          // Wave 1 holds fire for 9 s. 200 ms frames need a few seconds after that
-          // before a bolt connects; 10 s still shows zero hits.
-          return drones.time >= 16;
+          if (drones.time < grace && (drones.fired !== 0 || drones.enforcerShots !== 0)) window.__graceOk = false;
+          return drones.time >= until;
         },
-        undefined,
+        { grace: WISP_WAVE1_SPAWN_GRACE, until: stationaryUntil },
         { timeout: 40_000, polling: 50 },
       );
     } catch (error) {
       const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
       const snap = await readFight(page);
-      errors.push(`stationary fight did not reach 16 s sim (${JSON.stringify(snap)}): ${message}`);
+      errors.push(`stationary fight did not reach ${stationaryUntil.toFixed(1)} s sim (${JSON.stringify(snap)}): ${message}`);
       return;
     }
     const report = await readFight(page);
     const graceOk = await page.evaluate(() => window.__graceOk !== false);
     const loss = Number(frozen.hp) - Number(report.hp);
-    const cadence = (2 * 2 * 8) / (0.15 + 1.8);
+    const cadence = (2 * 2 * WISP_BOLT_DAMAGE) / (WISP_BOLT_GAP + WISP_WAVE1_BURST_GAP);
     const enforcerHits = Number(report.enforcerHits ?? 0);
     console.log(
       `stationary 200 ms frames: hp ${frozen.hp} -> ${report.hp} (${loss} HP), fired ${report.fired}, hits ${report.hits}, damage events ${report.damageEvents}, first bolt ${report.firstBolt}, enforcer shots ${report.enforcerShots}, enforcer hits ${enforcerHits}, first enforcer ${report.enforcerFirstShot}, sim ${report.time}, live bolts ${report.live}, cadence max ${cadence.toFixed(2)} HP/s`,
     );
-    if (!graceOk || !(report.firstBolt >= 9)) {
+    if (!graceOk || !(report.firstBolt >= WISP_WAVE1_SPAWN_GRACE)) {
       errors.push(`a drone fired during spawn grace (first ${report.firstBolt}, graceOk ${graceOk})`);
     }
     if (report.enforcerShots !== 0 || report.enforcerFirstShot != null || enforcerHits !== 0) {

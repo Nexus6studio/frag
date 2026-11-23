@@ -78,7 +78,7 @@ The early release ships two enemies. The WISP-4 is a rogue security drone. Wave 
 
 It hovers at 5.5 m/s and strafe-orbits, preferring 8–14 m. Altitude stays 1.2–2.4 m above the deck under it. Inside 6 m it takes the high end of that band. A player on a catwalk makes it climb clear of the parapet, then drop to the low band to peek. It does not use cover, and it stays inside the 32 × 32 × 9 atrium.
 
-The attack is a two-bolt plasma burst. Each bolt travels at 18 m/s, is 0.25 m in radius, and deals 8 damage through the armor rule above. Bolts in a burst are 0.15 s apart. The next burst's first bolt is 1.8 s after the second, and the last 0.3 s of that gap is a glow telegraph. Bolts die on the atrium hulls. A death is a spark burst, small metal and plastic scraps, and dark hydraulic fluid. Bolts, scraps, and the drones themselves are pooled. The drone, the bolts, and the scraps are procedural geometry.
+The attack is a two-bolt plasma burst. Each bolt travels at 18 m/s, is 0.25 m in radius, and deals 8 damage through the armor rule above. Bolts in a burst are 0.15 s apart. On wave 1 the next burst's first bolt is 2.78 s after the second. Later waves keep 1.8 s. The last 0.3 s of that gap is a glow telegraph. Bolts die on the atrium hulls. A death is a spark burst, small metal and plastic scraps, and dark hydraulic fluid. Bolts, scraps, and the drones themselves are pooled. The drone, the bolts, and the scraps are procedural geometry.
 
 ## UNIT-7 Hound
 
@@ -88,7 +88,7 @@ The stun-blaster is a short hitscan cone. It checks the atrium hull first, so it
 
 ## Waves
 
-There is no last wave and no arena-clear screen. `waveComposition` is the schedule: wave 1 is 2 drones, the first enforcer arrives on wave 2, each clear adds one drone, a second enforcer arrives on wave 3, and the cap is 4 drones and 2 enforcers. With `ENFORCER_ENABLED` on, those waves are 2+0, 3+1, 4+2, 4+2. Wave 1 drones wait 9 seconds before they fire. Later waves keep the 2 second spawn grace. The next wave waits about 2 seconds after the current one is fully dead. Spawns stay at least 8 m from the player, inside the atrium, and outside the hulls. At most 4 drones and 2 enforcers are alive at once.
+There is no last wave and no arena-clear screen. `waveComposition` is the schedule: wave 1 is 2 drones, the first enforcer arrives on wave 2, each clear adds one drone, a second enforcer arrives on wave 3, and the cap is 4 drones and 2 enforcers. With `ENFORCER_ENABLED` on, those waves are 2+0, 3+1, 4+2, 4+2. Wave 1 drones wait 3 seconds before they fire, and their bursts are 2.78 seconds apart. Later waves keep the 2 second spawn grace and the 1.8 second burst. The next wave waits about 2 seconds after the current one is fully dead. Spawns stay at least 8 m from the player, inside the atrium, and outside the hulls. At most 4 drones and 2 enforcers are alive at once.
 
 ## Death
 
