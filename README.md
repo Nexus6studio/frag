@@ -59,6 +59,14 @@ On the ground, forward, back, and strafe share an 8 m/s wish. Acceleration towar
 
 The prototype weapon is a magnetic flechette carbine. Holding the left mouse fires one rail-spike every 0.125 s, with no spread. Each flechette is a projectile: it travels at 70 m/s, is about 0.35 m long with a 0.06 m radius, and despawns after 1 s or 70 m. A hit deals 9 damage with no falloff. The magazine holds 40 and the reserve starts at 40, capped at 80. Reserve never goes negative. Reload takes 1.4 s, from R or automatically when the magazine is empty and rounds remain, and the trigger does nothing during that reload. Pulling the trigger with an empty magazine and an empty reserve does not fire and does not cycle. Each shot adds a 0.12° upward view punch that settles before the next shot if aim is held. The viewmodel, the cyan-magenta muzzle flash, the flechettes, and the tracers are procedural geometry. There is no audio.
 
+## WISP-4
+
+The early release ships one enemy, the WISP-4 rogue security drone. Two spawn in the atrium at the start, already hostile, at least 8 m from the player and clear of the hulls. Each is a low-poly hovering disc with cyan running lights and a visor slit that is red while it is aggro. It has 40 HP and no armor. Only VEC-9 flechettes damage it, through the projectile hitbox sweep. There is no hitscan.
+
+It hovers at 5.5 m/s and strafe-orbits, preferring 8–14 m. Altitude stays 1.2–2.4 m above the deck under it. Inside 6 m it takes the high end of that band. A player on a catwalk makes it climb clear of the parapet, then drop to the low band to peek. It does not use cover, and it stays inside the 32 × 32 × 9 atrium.
+
+The attack is a two-bolt plasma burst. Each bolt travels at 18 m/s, is 0.25 m in radius, and deals 8 damage. Bolts in a burst are 0.15 s apart. The next burst's first bolt is 1.8 s after the second, and the last 0.3 s of that gap is a glow telegraph. Bolts die on the atrium hulls. A death is a spark burst, small metal and plastic scraps, and dark hydraulic fluid. Bolts and scraps are pooled. The drone, the bolts, and the scraps are procedural geometry.
+
 ## Field of view
 
 The horizontal field of view is 105°. three.js `PerspectiveCamera.fov` is the vertical field of view, so Frag derives the vertical angle from 105° and the viewport aspect ratio (`width / height`) and writes that into `camera.fov` on load and on resize:
