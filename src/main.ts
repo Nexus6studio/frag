@@ -25,6 +25,7 @@ import { createLook } from "./look";
 import {
   CAMERA_NEAR,
   EYE_HEIGHT,
+  MAX_FRAME_SECONDS,
   clampedFrameSeconds,
   createMoveState,
   createMover,
@@ -237,6 +238,8 @@ let lastSimDt = 0;
 let simSeconds = 0;
 let simFrames = 0;
 let dropClock = false;
+/** A clamped gap, kept until cleared. The next short frame must not erase it. */
+let latchedStall = 0;
 
 document.addEventListener("visibilitychange", () => {
   // The resume frame would otherwise clamp a multi-second gap to 250 ms.
@@ -257,7 +260,18 @@ Object.defineProperty(renderer.domElement, "fragSim", {
       mag: quill.mag,
       reserve: quill.reserve,
       reloading: quill.reloading,
+      stall: latchedStall,
     };
+  },
+});
+Object.defineProperty(renderer.domElement, "fragStall", {
+  configurable: true,
+  enumerable: false,
+  get() {
+    return latchedStall;
+  },
+  set(value: number) {
+    if (value === 0) latchedStall = 0;
   },
 });
 Object.defineProperty(renderer.domElement, "fragPose", {
@@ -282,7 +296,9 @@ function frame(time: number): void {
   // The mover, the Quill Driver, and the drones share that slice.
   const drop = dropClock || document.visibilityState === "hidden";
   dropClock = false;
+  const gapMs = lastTime > 0 ? time - lastTime : 0;
   lastSimDt = clampedFrameSeconds(lastTime, time, drop);
+  if (!drop && gapMs > MAX_FRAME_SECONDS * 1000) latchedStall = lastSimDt;
   lastTime = time;
   const simDt = lastSimDt;
   const playing = shell.phase === "playing";

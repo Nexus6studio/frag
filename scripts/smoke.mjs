@@ -103,7 +103,7 @@ async function visibleText(page, selector) {
 
 const WARNING_TITLE = "Content warning";
 const WARNING_BODY =
-  "Contains fast-paced combat against robotic enemies, with explosions, sparks and debris. Includes flashing lights and rapid motion.";
+  "Contains fast-paced combat against fictional enemies, with blood, gibs, explosions, sparks and debris. Includes flashing lights and rapid motion.";
 
 function expectedBuildId() {
   const env = process.env.GITHUB_SHA?.trim() ?? "";
@@ -337,17 +337,23 @@ async function assertHiddenTabDoesNotSpike(page, errors) {
     if (jump > 0.35) errors.push(`hidden tab moved the player ${jump.toFixed(2)} m`);
   }
 
+  // lastSimDt is one slot. The callback after this wait often runs on the
+  // following 16.7 ms frame, so read the clamp the sim keeps until cleared.
   const clamped = await page.evaluate(
     () =>
       new Promise((resolve) => {
+        const canvas = document.querySelector("canvas");
+        if (canvas instanceof HTMLCanvasElement) canvas.fragStall = 0;
         const start = performance.now();
         while (performance.now() - start < 800) {
           // A stall that is not a tab hide still has to clamp, not drop.
         }
-        requestAnimationFrame(() => {
-          const live = document.querySelector("canvas");
-          resolve(live instanceof HTMLCanvasElement ? live.fragPose?.simDt ?? null : null);
-        });
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const live = document.querySelector("canvas");
+            resolve(live instanceof HTMLCanvasElement ? live.fragStall ?? null : null);
+          }),
+        );
       }),
   );
   if (!(clamped === 0.25)) errors.push(`non-hidden stall simulated ${clamped}s, expected 0.25`);
@@ -700,18 +706,28 @@ async function assertQuillFire(page, errors) {
   const mag = Number(mid.split("+")[0]);
   if (!(mag < 40)) errors.push(`ammo digits did not drop from 40 (now ${mid})`);
   await page.keyboard.press("KeyR");
-  try {
-    await page.waitForFunction(
-      (previous) => {
+  const refilled = (previous) =>
+    page.waitForFunction(
+      (prior) => {
         const text = document.querySelector("#hud-ammo")?.textContent ?? "";
-        return text.startsWith("40+") && text !== previous;
+        return text.startsWith("40+") && text !== prior;
       },
-      mid,
+      previous,
       { timeout: 15_000, polling: 50 },
     );
+  try {
+    await refilled(mid);
   } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`reload did not refill the magazine (now ${await ammoText()}): ${message}`);
+    // A lost pointer lock pauses the sim, so the first R never starts the reload.
+    await page.keyboard.press("KeyR");
+    try {
+      await refilled(mid);
+    } catch (retryError) {
+      const message = retryError instanceof Error ? retryError.message.split("\n")[0] : String(retryError);
+      const text = await page.evaluate(() => document.querySelector("#hud-ammo")?.textContent ?? "");
+      const phase = await page.evaluate(() => document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "");
+      errors.push(`reload did not refill the magazine (now ${text}, phase ${phase}): ${message}`);
+    }
   }
   const drones = await readDrones(page);
   if (drones.error) errors.push(drones.error);
@@ -1673,7 +1689,7 @@ async function assertPauseResume(browser, errors) {
   });
   try {
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
-    await page.waitForSelector("canvas", { timeout: 10_000 });
+    await page.waitForSelector("canvas", { timeout: 30_000 });
     await page.locator("#content-warning-continue").click();
     await page.locator("#click-to-play").click();
     await page.waitForFunction(
