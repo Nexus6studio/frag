@@ -14,7 +14,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { ATRIUM_PADS, ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
+import { ATRIUM_PADS, ATRIUM_SPAWN, createAtriumHull, createAtriumMover, needsRespawn } from "./atrium.ts";
 import { createAudio } from "./audio.ts";
 import { cueFor, hurtFromVitals, type SimEvent } from "./cues.ts";
 import { createCombatFeedback, strafeOf, stepWalkPhase, viewmodelOffset } from "./feel.ts";
@@ -31,7 +31,6 @@ import {
   MAX_FRAME_SECONDS,
   clampedFrameSeconds,
   createMoveState,
-  createMover,
   exposeMoveDebug,
   intentFromInput,
   planarSpeedOf,
@@ -106,7 +105,10 @@ player.subscribe((state) => {
 audio.setHp(heardHp);
 
 const hull = createAtriumHull();
-let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+const hearLaunch = (): void => {
+  hear({ type: "jump-pad" });
+};
+let mover = createAtriumMover(createMoveState(ATRIUM_SPAWN), hearLaunch);
 
 const scene = new Scene();
 scene.background = new Color(ATRIUM_CLEAR);
@@ -161,7 +163,7 @@ function restartRun(): void {
     wisps,
     origin: ATRIUM_SPAWN,
   });
-  mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+  mover = createAtriumMover(createMoveState(ATRIUM_SPAWN), hearLaunch);
   camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z);
   look.reset();
   input.clearLook();
@@ -387,7 +389,7 @@ function frame(time: number): void {
     const intent = intentFromInput(controls, look.yaw);
     mover.advance(simDt, intent);
     if (needsRespawn(mover.state.position)) {
-      mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+      mover = createAtriumMover(createMoveState(ATRIUM_SPAWN), hearLaunch);
     }
     pickups.step(simDt, mover.state.position, player);
   }

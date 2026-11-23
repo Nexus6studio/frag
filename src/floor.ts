@@ -6,6 +6,7 @@
 import {
   BufferGeometry,
   CanvasTexture,
+  DoubleSide,
   Float32BufferAttribute,
   Mesh,
   MeshBasicMaterial,
@@ -16,6 +17,7 @@ import {
 } from "three";
 import {
   ATRIUM_CRATES,
+  ATRIUM_JUMP_PADS,
   ATRIUM_PADS,
   ATRIUM_PILLARS,
   ATRIUM_RAMPS,
@@ -765,6 +767,113 @@ function addTrim(trim: Soup): void {
   addSoffitLips(trim);
 }
 
+const CHEVRON_CYAN: RGB = [0, 0.898, 1];
+const CHEVRON_MAGENTA: RGB = [1, 0.18, 0.624];
+
+type RGB = readonly [number, number, number];
+
+function pushTri(
+  position: number[],
+  color: number[],
+  a: Triple,
+  b: Triple,
+  c: Triple,
+  rgb: RGB,
+): void {
+  position.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+  color.push(rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]);
+}
+
+function pushQuad(
+  position: number[],
+  color: number[],
+  a: Triple,
+  b: Triple,
+  c: Triple,
+  d: Triple,
+  rgb: RGB,
+): void {
+  pushTri(position, color, a, b, c, rgb);
+  pushTri(position, color, a, c, d, rgb);
+}
+
+/** One outward-pointing mark. `dir` is +1 toward +X. */
+function addChevron(
+  position: number[],
+  color: number[],
+  cx: number,
+  cz: number,
+  dir: number,
+  along: number,
+  rgb: RGB,
+): void {
+  const y = 0.062;
+  const tail = cx + dir * along;
+  const tip = cx + dir * (along + 0.2);
+  const near = 0.045;
+  const far = 0.3;
+  pushQuad(
+    position,
+    color,
+    [tail, y, cz + near],
+    [tail, y, cz + far],
+    [tip, y, cz + 0.02],
+    [tip, y, cz - 0.02],
+    rgb,
+  );
+  pushQuad(
+    position,
+    color,
+    [tail, y, cz - far],
+    [tail, y, cz - near],
+    [tip, y, cz + 0.02],
+    [tip, y, cz - 0.02],
+    rgb,
+  );
+}
+
+/** Both well pads, one mesh. The material color pulses so the chevrons breathe. */
+function jumpPadMesh(): { mesh: Mesh; triangles: number } {
+  const position: number[] = [];
+  const color: number[] = [];
+  for (const pad of ATRIUM_JUMP_PADS) {
+    const plate: RGB = pad.dirX > 0 ? [0, 0.22, 0.28] : [0.28, 0.05, 0.16];
+    pushQuad(
+      position,
+      color,
+      [pad.minX - 0.06, 0.03, pad.minZ - 0.06],
+      [pad.maxX + 0.06, 0.03, pad.minZ - 0.06],
+      [pad.maxX + 0.06, 0.03, pad.maxZ + 0.06],
+      [pad.minX - 0.06, 0.03, pad.maxZ + 0.06],
+      plate,
+    );
+    const marks: readonly RGB[] =
+      pad.dirX > 0
+        ? [CHEVRON_CYAN, CHEVRON_MAGENTA, CHEVRON_CYAN]
+        : [CHEVRON_MAGENTA, CHEVRON_CYAN, CHEVRON_MAGENTA];
+    const shifts = [-0.28, -0.02, 0.24];
+    for (let i = 0; i < shifts.length; i += 1) {
+      addChevron(position, color, pad.x, pad.z, pad.dirX, shifts[i] ?? 0, marks[i] ?? CHEVRON_CYAN);
+    }
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(position, 3));
+  geometry.setAttribute("color", new Float32BufferAttribute(color, 3));
+  const material = new MeshBasicMaterial({
+    vertexColors: true,
+    toneMapped: false,
+    side: DoubleSide,
+  });
+  material.name = "atrium-jump-pads";
+  const mesh = new Mesh(geometry, material);
+  mesh.name = "atrium-jump-pads";
+  mesh.onBeforeRender = () => {
+    const wave = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
+    material.color.setScalar(0.42 + 0.58 * wave);
+  };
+  return { mesh, triangles: position.length / 9 };
+}
+
 export function buildAtriumView(): AtriumView {
   const floor = new Soup();
   const shell = new Soup();
@@ -778,6 +887,7 @@ export function buildAtriumView(): AtriumView {
   const amber = new Soup();
   addBeacons(amber);
   const pads = buildPadViews();
+  const jumpPads = jumpPadMesh();
 
   const panel = createPanelTexture();
   const panels = shellMaterial(panel);
@@ -791,6 +901,7 @@ export function buildAtriumView(): AtriumView {
     glowMesh(amber, AMBER, "atrium-amber"),
   ];
   for (const pad of pads.pads) meshes.push(pad.mesh);
+  meshes.push(jumpPads.mesh);
   let triangles =
     floor.triangles +
     shell.triangles +
@@ -799,7 +910,8 @@ export function buildAtriumView(): AtriumView {
     cyan.triangles +
     magenta.triangles +
     amber.triangles +
-    pads.triangles;
+    pads.triangles +
+    jumpPads.triangles;
   const extra = { count: 0 };
   addSigns(meshes, extra);
   triangles += extra.count;

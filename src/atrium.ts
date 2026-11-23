@@ -1,12 +1,14 @@
 // Neon Atrium, the play space that replaces the flat test floor.
 //
 // World scale is 1 unit = 1 meter. The hull is boxes and ramp planes for the
-// existing capsule step in move.ts. Nothing here changes that response: the
-// kill plane is applied around the step, and surfaces are not stacked in the
-// same column, because the walker stands on the highest surface it finds.
+// existing capsule step in move.ts. The kill plane is applied around the step,
+// and surfaces are not stacked in the same column, because the walker stands
+// on the highest surface it finds. Jump pads do not add hulls: after a grounded
+// step they replace the velocity with one fixed arc.
 //
 // Layout, centered on the origin, +X east, +Z south, -Z north:
 //   well          10×10 m at y = 0, under the implicit ground plane
+//   jump pads     east and west edges of the well, one arc onto each catwalk
 //   concourse     6 m ring around the well, at y = 0.8
 //   parapet       2 m band at |coord| 11–13, top y = 6.6 (inner rail)
 //   catwalk       outer 3 m (|coord| 13–16) at y = 5.3
@@ -19,8 +21,10 @@
 import {
   CAPSULE_HEIGHT,
   CAPSULE_RADIUS,
+  PLANAR_CAP,
   STEP_HEIGHT,
   createMoveState,
+  createMover,
   stepMovement,
   type BoxSolid,
   type Hull,
@@ -133,6 +137,32 @@ export const ATRIUM_RAMPS: readonly AtriumRamp[] = [
     rise: RAMP_RISE,
     lineX: -8.9,
   },
+];
+
+/**
+ * Vertical speed of a well jump pad. With gravity 20 this crests near 7.1 m,
+ * which clears the 6.6 m parapet and keeps the capsule head under the ceiling.
+ */
+export const JUMP_PAD_LIFT = 16.8;
+
+export interface AtriumJumpPad {
+  id: "east" | "west";
+  /** Drawn center, on the well floor. */
+  x: number;
+  z: number;
+  /** Unit bias toward that side's catwalk. One axis is zero so the speed stays at the planar cap. */
+  dirX: number;
+  dirZ: number;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/** East and west edges of the sunken well. The center ammo pad at the origin stays clear. */
+export const ATRIUM_JUMP_PADS: readonly AtriumJumpPad[] = [
+  { id: "east", x: 3.8, z: 0, dirX: 1, dirZ: 0, minX: 3.5, maxX: 4.1, minZ: -0.7, maxZ: 0.7 },
+  { id: "west", x: -3.8, z: 0, dirX: -1, dirZ: 0, minX: -4.1, maxX: -3.5, minZ: -0.7, maxZ: 0.7 },
 ];
 
 export const ATRIUM_PADS: readonly AtriumPad[] = [
@@ -288,11 +318,55 @@ export function respawnState(): MoveState {
   return createMoveState(ATRIUM_SPAWN);
 }
 
-export function stepAtrium(state: MoveState, intent: MoveIntent, dt: number): MoveState {
+export function stepAtrium(
+  state: MoveState,
+  intent: MoveIntent,
+  dt: number,
+  onLaunch?: () => void,
+): MoveState {
   if (needsRespawn(state.position)) return respawnState();
   const next = stepMovement(state, intent, dt, HULL);
   if (needsRespawn(next.position)) return respawnState();
-  return next;
+  const launched = launchFromPad(state, next);
+  if (!launched) return next;
+  onLaunch?.();
+  return launched;
+}
+
+/** Same 120 Hz accumulator as createMover, stepping the atrium so a pad can launch. */
+export function createAtriumMover(initial?: MoveState, onLaunch?: () => void) {
+  return createMover(HULL, initial, (state, intent, dt) => stepAtrium(state, intent, dt, onLaunch));
+}
+
+function padUnder(feet: Vec3): AtriumJumpPad | null {
+  // The catwalk shares no xz with these pads, but a high body must not relaunch.
+  if (feet.y > 0.45) return null;
+  for (const pad of ATRIUM_JUMP_PADS) {
+    if (feet.x < pad.minX || feet.x > pad.maxX || feet.z < pad.minZ || feet.z > pad.maxZ) continue;
+    return pad;
+  }
+  return null;
+}
+
+/**
+ * A grounded step whose feet are on a pad replaces the velocity with one
+ * fixed arc: full planar cap toward the near catwalk, plus the lift. The next
+ * step is airborne, so standing on the pad does not fire again until a landing.
+ */
+function launchFromPad(before: MoveState, after: MoveState): MoveState | null {
+  if (!before.grounded) return null;
+  const pad = padUnder(after.position);
+  if (!pad) return null;
+  return {
+    position: { x: after.position.x, y: after.position.y, z: after.position.z },
+    velocity: {
+      x: pad.dirX * PLANAR_CAP,
+      y: JUMP_PAD_LIFT,
+      z: pad.dirZ * PLANAR_CAP,
+    },
+    grounded: false,
+    timeOnGround: 0,
+  };
 }
 
 /** True when the capsule at `feet` is not inside a wall, rail, stair, or prop. */
