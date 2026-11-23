@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Frag</title>
+    <meta name="description" content="A Nexus6 Studio browser FPS. Coming soon." />
+    <link rel="icon" href="data:," />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0a0b10;
+        color: #f4f6fb;
+        color-scheme: dark;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(ellipse at 50% 40%, rgba(0, 229, 255, 0.08), transparent 58%),
+          repeating-linear-gradient(
+            0deg,
+            transparent,
+            transparent 31px,
+            rgba(0, 229, 255, 0.05) 32px
+          ),
+          repeating-linear-gradient(
+            90deg,
+            transparent,
+            transparent 31px,
+            rgba(255, 46, 159, 0.045) 32px
+          ),
+          #0a0b10;
+      }
+
+      main {
+        position: relative;
+        box-sizing: border-box;
+        width: min(440px, calc(100% - 48px));
+        padding: 40px 32px 36px;
+        text-align: center;
+        background: #14151c;
+        border: 1px solid rgba(0, 229, 255, 0.75);
+        box-shadow: 0 0 32px rgba(0, 229, 255, 0.16);
+      }
+
+      main::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #00e5ff, #ff2e9f);
+      }
+
+      .mark {
+        display: block;
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 20px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 56px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        line-height: 1;
+      }
+
+      .status {
+        margin: 16px 0 0;
+        color: #00e5ff;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+      }
+
+      .tag {
+        margin: 14px 0 0;
+        color: #d5d8e2;
+        font-size: 16px;
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <path
+          fill="none"
+          stroke="#00e5ff"
+          stroke-width="2"
+          d="M32 6 46 18 58 32 46 46 32 58 18 46 6 32 18 18Z"
+        />
+        <path
+          fill="none"
+          stroke="#ff2e9f"
+          stroke-width="2"
+          d="M22 40 32 14 42 40"
+        />
+        <path fill="#f4f6fb" d="M30 36h4v12h-4z" />
+      </svg>
+      <h1>FRAG</h1>
+      <p class="status">Coming soon</p>
+      <p class="tag">A Nexus6 Studio browser FPS</p>
+    </main>
+  </body>
+</html>
