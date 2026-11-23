@@ -309,26 +309,7 @@ async function assertCanvasAspect(page, errors, label) {
 }
 
 async function assertHiddenTabDoesNotSpike(page, errors) {
-  const dropped = await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        const canvas = document.querySelector("canvas");
-        const before = canvas instanceof HTMLCanvasElement ? canvas.fragPose : null;
-        document.dispatchEvent(new Event("visibilitychange"));
-        const start = performance.now();
-        while (performance.now() - start < 1500) {
-          // Block the frame so the next animation callback sees a multi-second gap.
-        }
-        requestAnimationFrame(() => {
-          const live = document.querySelector("canvas");
-          resolve({
-            simDt: live instanceof HTMLCanvasElement ? live.fragPose?.simDt ?? null : null,
-            before,
-            after: live instanceof HTMLCanvasElement ? live.fragPose : null,
-          });
-        });
-      }),
-  );
+  const dropped = await readStallFrame(page, { hide: true, holdMs: 1500 });
   if (dropped.simDt !== 0) errors.push(`hidden tab resume simulated ${dropped.simDt}s`);
   if (!dropped.after || !Number.isFinite(dropped.after.x) || !Number.isFinite(dropped.after.vx)) {
     errors.push(`pose after hide is ${JSON.stringify(dropped.after)}`);
@@ -337,20 +318,45 @@ async function assertHiddenTabDoesNotSpike(page, errors) {
     if (jump > 0.35) errors.push(`hidden tab moved the player ${jump.toFixed(2)} m`);
   }
 
-  const clamped = await page.evaluate(
-    () =>
+  const clamped = await readStallFrame(page, { hide: false, holdMs: 800 });
+  if (!(clamped.simDt === 0.25)) errors.push(`non-hidden stall simulated ${clamped.simDt}s, expected 0.25`);
+}
+
+// The game stores one simDt and the next animation frame replaces it.
+// A callback queued after the stall often lands on that following frame
+// (about 16.7 ms) and misses the clamp. Sample inside the frame that
+// measured the gap, before another frame is allowed to run.
+function readStallFrame(page, { hide, holdMs }) {
+  return page.evaluate(
+    ({ hide, holdMs }) =>
       new Promise((resolve) => {
-        const start = performance.now();
-        while (performance.now() - start < 800) {
-          // A stall that is not a tab hide still has to clamp, not drop.
-        }
-        requestAnimationFrame(() => {
+        const native = window.requestAnimationFrame.bind(window);
+        const previous = window.requestAnimationFrame;
+        let capture = false;
+        let before = null;
+        window.requestAnimationFrame = (callback) =>
+          native((time) => {
+            callback(time);
+            if (!capture) return;
+            capture = false;
+            window.requestAnimationFrame = previous;
+            const live = document.querySelector("canvas");
+            const after = live instanceof HTMLCanvasElement ? live.fragPose ?? null : null;
+            resolve({ simDt: after?.simDt ?? null, before, after });
+          });
+        native(() => {
           const live = document.querySelector("canvas");
-          resolve(live instanceof HTMLCanvasElement ? live.fragPose?.simDt ?? null : null);
+          before = live instanceof HTMLCanvasElement ? live.fragPose ?? null : null;
+          if (hide) document.dispatchEvent(new Event("visibilitychange"));
+          const start = performance.now();
+          while (performance.now() - start < holdMs) {
+            // Hold this turn so the next animation timestamp includes the gap.
+          }
+          capture = true;
         });
       }),
+    { hide, holdMs },
   );
-  if (!(clamped === 0.25)) errors.push(`non-hidden stall simulated ${clamped}s, expected 0.25`);
 }
 
 async function assertContextLoss(page, errors) {
