@@ -17,6 +17,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
 import { restartCombat } from "./combat.ts";
 import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium, syncPadViews } from "./floor.ts";
+import { createFight } from "./fight.ts";
 import { playerHitboxes } from "./hitbox.ts";
 import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
@@ -36,8 +37,9 @@ import { mountQuillView } from "./quill-view.ts";
 import { applyDamage, createPickupSim, exposeDamageDebug } from "./pickups.ts";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
-import { createWispSim, exposeRunDebug } from "./wisp.ts";
+import { exposeRunDebug } from "./wisp.ts";
 import { mountWispView } from "./wisp-view.ts";
+import { mountEnforcerView } from "./enforcer-view.ts";
 
 const renderer = new WebGLRenderer({
   antialias: true,
@@ -59,7 +61,12 @@ const input = createInput(renderer.domElement, {
   onPointerDown: () => onPointerDown(),
   onPointerUp: () => onPointerUp(),
 });
-const player = createPlayerState();
+// The stationary smoke probe raises this so drone bolts can be counted for a
+// full 10 s while the enforcer is also shooting. A normal load leaves it unset.
+const benchHp = (window as Window & { __fragBenchHp?: unknown }).__fragBenchHp;
+const player = createPlayerState(
+  typeof benchHp === "number" && Number.isFinite(benchHp) && benchHp > 0 ? { hp: benchHp } : undefined,
+);
 
 const hull = createAtriumHull();
 let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
@@ -92,8 +99,11 @@ const debugTarget = import.meta.env.DEV
     }
   : null;
 const quillView = mountQuillView(scene, camera, quill, debugTarget);
-const wisps = createWispSim({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN });
+const fight = createFight({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN });
+const wisps = fight.wisps;
+const enforcers = fight.enforcers;
 const wispView = mountWispView(scene, wisps, camera);
+const enforcerView = mountEnforcerView(scene, enforcers);
 
 function restartRun(): void {
   // The click that leaves the recap is not a shot on the next frame.
@@ -156,7 +166,7 @@ Object.defineProperty(renderer.domElement, "fragDrones", {
   configurable: true,
   enumerable: false,
   get() {
-    return wisps.snapshot();
+    return fight.snapshot();
   },
 });
 
@@ -168,7 +178,14 @@ if (import.meta.env.DEV) {
     const next = applyDamage(damage, current.hp, current.armor);
     player.set({ hp: next.hp, armor: next.armor });
   });
-  exposeRunDebug(window, wisps);
+  exposeRunDebug(window, {
+    killAlive(): void {
+      fight.killAll();
+    },
+    snapshot() {
+      return fight.snapshot();
+    },
+  });
 }
 
 function resize(): void {
@@ -307,12 +324,14 @@ function frame(time: number): void {
     // pointer lock was rejected. The warning, click-to-play, and pause must
     // not burn the 2 s grace or leave a burst to land on resume.
     wisps.update(simDt, body.position);
+    enforcers.update(simDt, body.position);
   }
   hud.setWave(wisps.wave);
   look.setViewPunch(quill.punchDeg);
   quillView.setDebugVisible(shell.debug);
   quillView.sync();
   wispView.sync();
+  enforcerView.sync();
   shell.onFrame(time, {
     x: camera.position.x,
     y: camera.position.y,

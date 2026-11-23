@@ -30,11 +30,17 @@ import {
   WISP_FLUID_CAP,
   WISP_GIB_CAP,
   WISP_SPARK_CAP,
-  createWispSim,
   wispInsideVolume,
 } from "../src/wisp.ts";
 import { mountWispView } from "../src/wisp-view.ts";
-import { DRONE_CAP } from "../src/waves.ts";
+import { createFight } from "../src/fight.ts";
+import {
+  ENFORCER_FLASH_CAP,
+  ENFORCER_SPARK_CAP,
+  enforcerInsideVolume,
+} from "../src/enforcer.ts";
+import { mountEnforcerView } from "../src/enforcer-view.ts";
+import { DRONE_CAP, ENFORCER_CAP } from "../src/waves.ts";
 
 const SOAK_SECONDS = 20 * 60;
 const STEPS = Math.round(SOAK_SECONDS / SIM_DT);
@@ -47,7 +53,9 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   const hitboxes = createHitboxWorld();
   const quill = createQuill({ hull, player, hitboxes });
   const pickups = createPickupSim(quill);
-  const wisps = createWispSim({ hull, player, hitboxes, origin: ATRIUM_SPAWN });
+  const fight = createFight({ hull, player, hitboxes, origin: ATRIUM_SPAWN });
+  const wisps = fight.wisps;
+  const enforcers = fight.enforcers;
   let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
 
   const scene = new Scene();
@@ -59,6 +67,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   const look = createLook(camera);
   const quillView = mountQuillView(scene, camera, quill, null);
   const wispView = mountWispView(scene, wisps);
+  const enforcerView = mountEnforcerView(scene, enforcers);
 
   const aim = { x: 0, y: 0, z: -1 };
   const muzzle = { x: 0, y: 0, z: 0 };
@@ -69,6 +78,11 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     y: drone.position.y,
     z: drone.position.z,
   }));
+  const previousHounds = enforcers.units.map((unit) => ({
+    x: unit.position.x,
+    y: unit.position.y,
+    z: unit.position.z,
+  }));
   const restartMarks = new Set(
     [0.04, 0.12, 0.28, 0.55, 0.8].map((fraction) => Math.floor(STEPS * fraction)),
   );
@@ -76,6 +90,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   let restarts = 0;
   let baseline = null;
   let maxDrones = 0;
+  let maxEnforcers = 0;
   let maxWave = 1;
   const samples = [];
 
@@ -92,6 +107,11 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       previous[i].x = wisps.drones[i].position.x;
       previous[i].y = wisps.drones[i].position.y;
       previous[i].z = wisps.drones[i].position.z;
+    }
+    for (let i = 0; i < enforcers.units.length; i += 1) {
+      previousHounds[i].x = enforcers.units[i].position.x;
+      previousHounds[i].y = enforcers.units[i].position.y;
+      previousHounds[i].z = enforcers.units[i].position.z;
     }
     restarts += 1;
     assert.equal(player.get().hp, 100, `${reason} restart hp`);
@@ -110,7 +130,10 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   }
 
   for (let step = 0; step < STEPS; step += 1) {
-    if (player.get().hp <= 0) restart("death");
+    // A downed runner used to reset the wave. The enforcer makes that reset
+    // starve the cycle, so a death refills HP and the scripted restarts below
+    // are what prove the pools come back clean.
+    if (player.get().hp <= 0) player.set({ hp: 100, armor: 0 });
     if (restartMarks.has(step)) {
       player.set({ hp: 0 });
       restart("scripted");
@@ -118,12 +141,17 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
 
     look.apply(2, Math.sin(step / 80) * 0.4);
     const ammoDry = quill.mag <= 0 && quill.reserve <= 0;
-    const pad = ammoDry ? nearestAmmo(mover.state.position, pickups.pads) : null;
+    const pad = ammoDry
+      ? nearestPad(mover.state.position, pickups.pads, "ammo")
+      : player.get().hp <= 50
+        ? nearestPad(mover.state.position, pickups.pads, "health")
+        : null;
+    const engaged = !pad && threatNear(mover.state.position, wisps.drones, enforcers.units, 16);
     const yaw = pad ? yawToward(mover.state.position, pad) : look.yaw;
     mover.advance(SIM_DT, {
-      forward: 1,
-      strafe: Math.sin(step / 90) > 0 ? 1 : -1,
-      jump: step % 480 === 0,
+      forward: engaged ? 0 : 1,
+      strafe: engaged ? 0 : Math.sin(step / 90) > 0 ? 1 : -1,
+      jump: !engaged && step % 480 === 0,
       yawDeg: yaw,
     });
     if (needsRespawn(mover.state.position)) {
@@ -141,19 +169,25 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     eye.x = body.position.x;
     eye.y = body.position.y + EYE_HEIGHT;
     eye.z = body.position.z;
-    aimAt(eye, wisps.drones, previous, aim, look);
+    aimAt(eye, wisps.drones, previous, enforcers.units, previousHounds, aim, look);
     muzzleOrigin(eye, aim, muzzle);
     if (player.get().hp > 0) {
       quill.update(SIM_DT, command);
-      wisps.update(SIM_DT, body.position);
+      fight.update(SIM_DT, body.position);
     }
     syncPadViews(atrium.pads, pickups.pads);
     quillView.sync();
     wispView.sync();
+    enforcerView.sync();
     for (let i = 0; i < wisps.drones.length; i += 1) {
       previous[i].x = wisps.drones[i].position.x;
       previous[i].y = wisps.drones[i].position.y;
       previous[i].z = wisps.drones[i].position.z;
+    }
+    for (let i = 0; i < enforcers.units.length; i += 1) {
+      previousHounds[i].x = enforcers.units[i].position.x;
+      previousHounds[i].y = enforcers.units[i].position.y;
+      previousHounds[i].z = enforcers.units[i].position.z;
     }
 
     assert.equal(quill.poolSize, QUILL_POOL_CAP);
@@ -164,8 +198,14 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     assert.equal(wisps.gibs.length, WISP_GIB_CAP);
     assert.equal(wisps.fluid.length, WISP_FLUID_CAP);
     assert.equal(wisps.drones.length, DRONE_CAP);
+    assert.equal(enforcers.units.length, ENFORCER_CAP);
+    assert.equal(enforcers.sparks.length, ENFORCER_SPARK_CAP);
+    assert.equal(enforcers.flashes.length, ENFORCER_FLASH_CAP);
     assert.ok(wisps.aliveCount() <= DRONE_CAP);
+    assert.ok(enforcers.aliveCount() <= ENFORCER_CAP);
+    assert.ok(wisps.aliveCount() + enforcers.aliveCount() <= DRONE_CAP + ENFORCER_CAP);
     maxDrones = Math.max(maxDrones, wisps.aliveCount());
+    maxEnforcers = Math.max(maxEnforcers, enforcers.aliveCount());
     maxWave = Math.max(maxWave, wisps.wave);
 
     for (let i = 0; i < wisps.drones.length; i += 1) {
@@ -173,6 +213,12 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       finiteVec(drone.position, `drone ${i}`);
       if (!drone.alive) continue;
       assert.equal(wispInsideVolume(drone.position), true, `drone escaped ${fmt(drone.position)}`);
+    }
+    for (let i = 0; i < enforcers.units.length; i += 1) {
+      const unit = enforcers.units[i];
+      finiteVec(unit.position, `enforcer ${i}`);
+      if (!unit.alive) continue;
+      assert.equal(enforcerInsideVolume(unit.position), true, `enforcer escaped ${fmt(unit.position)}`);
     }
     for (let i = 0; i < wisps.bolts.length; i += 1) {
       const bolt = wisps.bolts[i];
@@ -200,6 +246,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       assert.ok(slot.y >= KILL_Y && slot.y <= CEILING_Y + 1, `flechette y ${slot.y}`);
     }
     assertPoolInside(wisps.sparks, "spark");
+    assertPoolInside(enforcers.sparks, "enforcer spark");
     assertPoolInside(wisps.gibs, "gib");
     assertPoolInside(wisps.fluid, "fluid");
 
@@ -230,6 +277,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
         ...census,
         wave: wisps.wave,
         drones: wisps.aliveCount(),
+        enforcers: enforcers.aliveCount(),
         flechettes: quill.liveCount,
         bolts: wisps.bolts.filter((bolt) => bolt.alive).length,
       });
@@ -239,35 +287,50 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   assert.ok(restarts >= 5, `death restarts ${restarts}`);
   assert.ok(maxWave >= 3, `waves did not cycle (max wave ${maxWave})`);
   assert.ok(maxDrones >= 2 && maxDrones <= DRONE_CAP, `drone count ${maxDrones}`);
+  assert.ok(maxEnforcers >= 1 && maxEnforcers <= ENFORCER_CAP, `enforcer count ${maxEnforcers}`);
   assert.ok(baseline, "no memory sample");
   console.log(
-    `soak ${SOAK_SECONDS}s restarts ${restarts} maxWave ${maxWave} maxDrones ${maxDrones} geometries ${baseline.geometries} textures ${baseline.textures} sceneChildren ${baseline.children} nodes ${baseline.nodes} samples ${samples.length}`,
+    `soak ${SOAK_SECONDS}s restarts ${restarts} maxWave ${maxWave} maxDrones ${maxDrones} maxEnforcers ${maxEnforcers} geometries ${baseline.geometries} textures ${baseline.textures} sceneChildren ${baseline.children} nodes ${baseline.nodes} samples ${samples.length}`,
   );
 });
 
-function aimAt(origin, drones, previous, out, look) {
+function aimAt(origin, drones, previous, hounds, previousHounds, out, look) {
   let bestD = Infinity;
   let dx = 0;
   let dy = 0;
   let dz = 0;
-  for (let i = 0; i < drones.length; i += 1) {
-    const drone = drones[i];
-    if (!drone.alive) continue;
-    const prior = previous[i];
-    const vx = (drone.position.x - prior.x) / SIM_DT;
-    const vy = (drone.position.y - prior.y) / SIM_DT;
-    const vz = (drone.position.z - prior.z) / SIM_DT;
-    const ox = drone.position.x - origin.x;
-    const oy = drone.position.y - origin.y;
-    const oz = drone.position.z - origin.z;
+  const consider = (alive, x, y, z, px, py, pz, chest, bias) => {
+    if (!alive) return;
+    const vx = (x - px) / SIM_DT;
+    const vy = (y - py) / SIM_DT;
+    const vz = (z - pz) / SIM_DT;
+    const ox = x - origin.x;
+    const oy = y + chest - origin.y;
+    const oz = z - origin.z;
     const dist = Math.hypot(ox, oy, oz);
-    if (dist < bestD) {
-      bestD = dist;
+    // The enforcer blocks the wave and soaks more flechettes. Prefer it while
+    // it is anywhere the carbine can reach, then go back to the nearest drone.
+    if (dist - bias < bestD) {
+      bestD = dist - bias;
       const lead = dist / 70;
       dx = ox + vx * lead;
       dy = oy + vy * lead;
       dz = oz + vz * lead;
     }
+  };
+  let houndAlive = false;
+  for (let i = 0; i < hounds.length; i += 1) if (hounds[i].alive) houndAlive = true;
+  if (!houndAlive) {
+    for (let i = 0; i < drones.length; i += 1) {
+      const drone = drones[i];
+      const prior = previous[i];
+      consider(drone.alive, drone.position.x, drone.position.y, drone.position.z, prior.x, prior.y, prior.z, 0, 0);
+    }
+  }
+  for (let i = 0; i < hounds.length; i += 1) {
+    const unit = hounds[i];
+    const prior = previousHounds[i];
+    consider(unit.alive, unit.position.x, unit.position.y, unit.position.z, prior.x, prior.y, prior.z, 0.95, 0);
   }
   const len = Math.hypot(dx, dy, dz);
   if (!(bestD < Infinity) || len < 1e-4) {
@@ -280,12 +343,12 @@ function aimAt(origin, drones, previous, out, look) {
   out.z = dz * inv;
 }
 
-function nearestAmmo(position, pads) {
+function nearestPad(position, pads, kind) {
   let best = null;
   let bestD = Infinity;
   for (let i = 0; i < pads.length; i += 1) {
     const pad = pads[i];
-    if (pad.kind !== "ammo" || pad.cooldown > 0) continue;
+    if (pad.kind !== kind || pad.cooldown > 0) continue;
     const dist = Math.hypot(pad.x - position.x, pad.z - position.z);
     if (dist < bestD) {
       bestD = dist;
@@ -293,6 +356,20 @@ function nearestAmmo(position, pads) {
     }
   }
   return best;
+}
+
+function threatNear(position, drones, hounds, reach) {
+  for (let i = 0; i < hounds.length; i += 1) {
+    const unit = hounds[i];
+    if (!unit.alive) continue;
+    if (Math.hypot(unit.position.x - position.x, unit.position.z - position.z) < reach) return true;
+  }
+  for (let i = 0; i < drones.length; i += 1) {
+    const drone = drones[i];
+    if (!drone.alive) continue;
+    if (Math.hypot(drone.position.x - position.x, drone.position.z - position.z) < reach) return true;
+  }
+  return false;
 }
 
 function yawToward(from, pad) {
