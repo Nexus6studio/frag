@@ -1479,6 +1479,184 @@ async function readFight(page) {
   });
 }
 
+async function readPauseProbe(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    const drones = canvas instanceof HTMLCanvasElement ? canvas.fragDrones : null;
+    const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+    const pause = document.querySelector("#pause");
+    const title = document.querySelector("#pause-title");
+    const copy = document.querySelector("#pause .copy");
+    const panel = document.querySelector("#pause .panel");
+    const px = (el) => (el instanceof HTMLElement ? Number.parseFloat(getComputedStyle(el).fontSize) : null);
+    const style = (el) => (el instanceof HTMLElement ? getComputedStyle(el) : null);
+    return {
+      hp: document.querySelector("#hud-hp")?.textContent ?? "",
+      time: drones?.time ?? null,
+      sim: sim?.sim ?? null,
+      phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+      hidden: pause instanceof HTMLElement ? pause.hidden : null,
+      display: pause instanceof HTMLElement ? getComputedStyle(pause).display : "",
+      text: pause instanceof HTMLElement ? (pause.textContent ?? "") : "",
+      titlePx: px(title),
+      copyPx: px(copy),
+      titleColor: style(title)?.color ?? "",
+      copyColor: style(copy)?.color ?? "",
+      panel: style(panel)?.backgroundColor ?? "",
+      locked: document.pointerLockElement != null,
+    };
+  });
+}
+
+function assertPauseReadable(probe, errors, label) {
+  if (probe.hidden !== false || probe.display === "none") {
+    errors.push(`${label}: pause overlay is hidden (${probe.hidden}, ${probe.display})`);
+  }
+  const text = probe.text.replace(/\s+/g, " ");
+  if (!text.includes("Paused") || !text.includes("Click or press Enter to resume")) {
+    errors.push(`${label}: pause copy is ${JSON.stringify(probe.text)}`);
+  }
+  if (!(probe.titlePx >= 16)) errors.push(`${label}: pause title is ${probe.titlePx}px`);
+  if (!(probe.copyPx >= 16)) errors.push(`${label}: pause body is ${probe.copyPx}px`);
+  const titleContrast = contrastRatio(probe.titleColor, probe.panel);
+  const copyContrast = contrastRatio(probe.copyColor, probe.panel);
+  if (!(titleContrast >= 4.5)) {
+    errors.push(`${label}: pause title contrast ${titleContrast} (${probe.titleColor} on ${probe.panel})`);
+  }
+  if (!(copyContrast >= 4.5)) {
+    errors.push(`${label}: pause body contrast ${copyContrast} (${probe.copyColor} on ${probe.panel})`);
+  }
+}
+
+async function assertSimHeld(page, errors, label) {
+  const before = await readPauseProbe(page);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const after = await readPauseProbe(page);
+  if (before.time == null || after.time == null || before.sim == null || after.sim == null) {
+    errors.push(`${label}: sim probe missing (${JSON.stringify(before)})`);
+    return before;
+  }
+  if (after.time !== before.time || after.sim !== before.sim || after.hp !== before.hp) {
+    errors.push(
+      `${label}: sim advanced while paused (hp ${before.hp}->${after.hp}, drones ${before.time}->${after.time}, sim ${before.sim}->${after.sim})`,
+    );
+  }
+  return after;
+}
+
+async function assertSimAdvances(page, errors, label) {
+  const before = await readPauseProbe(page);
+  try {
+    await page.waitForFunction(
+      (start) => {
+        const canvas = document.querySelector("canvas");
+        if (!(canvas instanceof HTMLCanvasElement)) return false;
+        const drones = canvas.fragDrones;
+        const sim = canvas.fragSim;
+        if (!drones || !sim) return false;
+        return drones.time > start.time && sim.sim > start.sim;
+      },
+      { time: before.time, sim: before.sim },
+      { timeout: 8_000, polling: 50 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    const after = await readPauseProbe(page);
+    errors.push(`${label}: sim did not advance (${JSON.stringify(before)} -> ${JSON.stringify(after)}): ${message}`);
+  }
+}
+
+async function assertPauseResume(browser, errors) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  page.on("pageerror", (error) => {
+    errors.push(`pause resume pageerror: ${error.message}`);
+  });
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`pause resume console: ${message.text()}`);
+  });
+  try {
+    await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector("canvas", { timeout: 10_000 });
+    await page.locator("#content-warning-continue").click();
+    await page.locator("#click-to-play").click();
+    await page.waitForFunction(
+      () => document.querySelector("#app-shell")?.getAttribute("data-phase") === "playing",
+      undefined,
+      { timeout: 8_000, polling: 50 },
+    );
+
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => {
+        const pause = document.querySelector("#pause");
+        return (
+          pause instanceof HTMLElement &&
+          !pause.hidden &&
+          document.querySelector("#app-shell")?.getAttribute("data-phase") === "paused"
+        );
+      },
+      undefined,
+      { timeout: 3_000, polling: 50 },
+    );
+    assertPauseReadable(await readPauseProbe(page), errors, "escape");
+    await assertSimHeld(page, errors, "escape");
+
+    await page.locator("#pause").click();
+    await page.waitForFunction(
+      () => {
+        const pause = document.querySelector("#pause");
+        return (
+          pause instanceof HTMLElement &&
+          pause.hidden &&
+          document.querySelector("#app-shell")?.getAttribute("data-phase") === "playing"
+        );
+      },
+      undefined,
+      { timeout: 3_000, polling: 50 },
+    );
+    await assertSimAdvances(page, errors, "click resume");
+
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => {
+        const pause = document.querySelector("#pause");
+        return pause instanceof HTMLElement && !pause.hidden;
+      },
+      undefined,
+      { timeout: 3_000, polling: 50 },
+    );
+    assertPauseReadable(await readPauseProbe(page), errors, "escape before enter");
+    await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      if (!(canvas instanceof HTMLCanvasElement)) return;
+      canvas.requestPointerLock = () => Promise.reject(new DOMException("cooldown", "SecurityError"));
+    });
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(
+      () => {
+        const pause = document.querySelector("#pause");
+        return (
+          pause instanceof HTMLElement &&
+          pause.hidden &&
+          document.querySelector("#app-shell")?.getAttribute("data-phase") === "playing" &&
+          document.pointerLockElement == null
+        );
+      },
+      undefined,
+      { timeout: 3_000, polling: 50 },
+    );
+    const resumed = await readPauseProbe(page);
+    if (resumed.locked) errors.push("enter resume took the pointer during the cooldown");
+    if (resumed.hidden !== true) errors.push("pause overlay still visible after enter");
+    await assertSimAdvances(page, errors, "enter resume without pointer lock");
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`pause resume failed: ${message}`);
+  } finally {
+    await page.close();
+  }
+}
+
 async function assertStationaryDamage(browser, errors) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.on("pageerror", (error) => {
@@ -1903,6 +2081,7 @@ try {
     await assertCanvasAspect(page, errors, "after resize 700x900");
 
     await assertHiddenTabDoesNotSpike(page, errors);
+    await assertPauseResume(browser, errors);
     await assertLongRun(page, errors);
     await assertContextLoss(page, errors);
     await assertStationaryDamage(browser, errors);
