@@ -14,7 +14,7 @@ import { createHitboxWorld } from "../src/hitbox.ts";
 import { createPickupSim } from "../src/pickups.ts";
 import { createPlayerState } from "../src/player/state.ts";
 import { createQuill } from "../src/quill.ts";
-import { createWispSim } from "../src/wisp.ts";
+import { WISP_TELEGRAPH, WISP_WAVE1_SPAWN_GRACE, createWispSim } from "../src/wisp.ts";
 
 const EVENTS = [
   { type: "quill-shot" },
@@ -409,7 +409,7 @@ test("pickups, drones, and the enforcer report the cues they cause", () => {
   });
   let time = 0;
   const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
-  while (time < 2.6 && !fight.includes("wisp-shot")) {
+  while (time < WISP_WAVE1_SPAWN_GRACE + WISP_TELEGRAPH + 0.3 && !fight.includes("wisp-shot")) {
     wisps.update(1 / 120, feet);
     time += 1 / 120;
   }

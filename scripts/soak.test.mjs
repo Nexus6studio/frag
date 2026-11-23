@@ -153,7 +153,12 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       : player.get().hp <= 50
         ? nearestPad(mover.state.position, pickups.pads, "health")
         : null;
-    const engaged = !pad && threatNear(mover.state.position, wisps.drones, enforcers.units, 16);
+    // Planting on a drone inside 16 m stalls once the wave 1 enforcer is gone:
+    // the drone orbits behind a hull and the hold never breaks. Keep walking
+    // unless an enforcer is in that range. The enforcer still gets the plant,
+    // because it is what blocks the wave.
+    const houndNear = threatNear(mover.state.position, [], enforcers.units, 16);
+    const engaged = !pad && houndNear;
     const yaw = pad ? yawToward(mover.state.position, pad) : look.yaw;
     mover.advance(SIM_DT, {
       forward: engaged ? 0 : 1,

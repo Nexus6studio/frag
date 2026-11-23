@@ -88,7 +88,7 @@ The stun-blaster is a short hitscan cone. It checks the atrium hull first, so it
 
 ## Waves
 
-There is no last wave and no arena-clear screen. `waveComposition` is the schedule: wave 1 is 2 drones and 1 enforcer, each clear adds one drone, a second enforcer arrives on wave 3, and the cap is 4 drones and 2 enforcers. With `ENFORCER_ENABLED` on, those waves are 2+1, 3+1, 4+2, 4+2. The next wave waits about 2 seconds after the current one is fully dead. Spawns stay at least 8 m from the player, inside the atrium, and outside the hulls. At most 4 drones and 2 enforcers are alive at once.
+There is no last wave and no arena-clear screen. `waveComposition` is the schedule: wave 1 is 2 drones, the first enforcer arrives on wave 2, each clear adds one drone, a second enforcer arrives on wave 3, and the cap is 4 drones and 2 enforcers. With `ENFORCER_ENABLED` on, those waves are 2+0, 3+1, 4+2, 4+2. Wave 1 drones wait 9 seconds before they fire. Later waves keep the 2 second spawn grace. The next wave waits about 2 seconds after the current one is fully dead. Spawns stay at least 8 m from the player, inside the atrium, and outside the hulls. At most 4 drones and 2 enforcers are alive at once.
 
 ## Death
 

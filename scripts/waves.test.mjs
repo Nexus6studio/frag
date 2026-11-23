@@ -64,7 +64,7 @@ function clearIntoNext(sim, feet) {
 
 test("wave composition caps drones at 4 and enforcers at 2", () => {
   assert.equal(ENFORCER_ENABLED, true);
-  assert.deepEqual(waveComposition(1), { drones: 2, enforcers: 1 });
+  assert.deepEqual(waveComposition(1), { drones: 2, enforcers: 0 });
   assert.deepEqual(waveComposition(2), { drones: 3, enforcers: 1 });
   assert.deepEqual(waveComposition(3), { drones: 4, enforcers: 2 });
   assert.deepEqual(waveComposition(4), { drones: 4, enforcers: 2 });
@@ -82,7 +82,7 @@ test("wave composition caps drones at 4 and enforcers at 2", () => {
   assert.deepEqual(
     [1, 2, 3, 4].map((wave) => waveSpawnCounts(wave, true)),
     [
-      { drones: 2, enforcers: 1 },
+      { drones: 2, enforcers: 0 },
       { drones: 3, enforcers: 1 },
       { drones: 4, enforcers: 2 },
       { drones: 4, enforcers: 2 },
@@ -161,7 +161,7 @@ test("flag off clears 2, 3, 4, 4, 4 drones with a two second gap and no win", ()
   assert.ok(sim.wave >= 5);
 });
 
-test("live waves are 2+1, 3+1, 4+2, 4+2 and cap at 6", () => {
+test("live waves are 2+0, 3+1, 4+2, 4+2 and cap at 6", () => {
   const hull = createAtriumHull();
   const player = createPlayerState({ hp: 500 });
   const fight = createFight({
@@ -209,7 +209,7 @@ test("live waves are 2+1, 3+1, 4+2, 4+2 and cap at 6", () => {
     `waves ${seen.map((row) => `${row.drones}+${row.enforcers}`).join(", ")}, max alive ${maxAlive}`,
   );
   assert.deepEqual(seen, [
-    { drones: 2, enforcers: 1 },
+    { drones: 2, enforcers: 0 },
     { drones: 3, enforcers: 1 },
     { drones: 4, enforcers: 2 },
     { drones: 4, enforcers: 2 },
@@ -217,6 +217,34 @@ test("live waves are 2+1, 3+1, 4+2, 4+2 and cap at 6", () => {
   assert.ok(maxAlive <= DRONE_CAP + ENFORCER_CAP);
   assert.equal(fight.wisps.cleared, undefined);
   assert.equal(fight.wisps.won, undefined);
+});
+
+test("a player standing idle in wave 1 still has HP at 12 s and is not dead before 15 s", () => {
+  const hull = createAtriumHull();
+  const player = createPlayerState();
+  const fight = createFight({
+    hull,
+    player,
+    hitboxes: createHitboxWorld(),
+    origin: ATRIUM_SPAWN,
+  });
+  const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
+  assert.equal(fight.wisps.wave, 1);
+  assert.equal(fight.wisps.aliveCount(), 2);
+  assert.equal(fight.enforcers.aliveCount(), 0);
+  let t = 0;
+  let hpAt12 = null;
+  while (t < 15 - 1e-9) {
+    fight.update(DT, feet);
+    t += DT;
+    const hp = player.get().hp;
+    if (hpAt12 == null && t + 1e-9 >= 12) hpAt12 = hp;
+    assert.ok(hp > 0, `dead at ${t.toFixed(3)} s`);
+  }
+  assert.ok(hpAt12 > 0, `hp at 12 s is ${hpAt12}`);
+  assert.equal(fight.wisps.wave, 1);
+  assert.equal(fight.enforcers.aliveCount(), 0);
+  console.log(`wave 1 idle hp at 12 s ${hpAt12}, at 15 s ${player.get().hp}`);
 });
 
 test("death recap matches a scripted fight and further hits do nothing", () => {

@@ -52,7 +52,7 @@ export const ENFORCER_RANGE_MIN = 4;
 export const ENFORCER_RANGE_MAX = 8;
 export const ENFORCER_DAMAGE = 12;
 export const ENFORCER_INTERVAL = 0.9;
-/** Same quiet start as the drones, so wave 1 does not shoot during the latch. */
+/** Quiet start on wave 2 and later, matching the drones. Wave 1 fields none. */
 export const ENFORCER_GRACE = 2;
 export const ENFORCER_SEPARATION = 8;
 export const ENFORCER_SIDESTEP = 1;

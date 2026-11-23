@@ -406,7 +406,7 @@ function frame(time: number): void {
     quill.update(simDt, quillCommand);
     // Grace, bursts, and bolts run whenever play is running, even if the
     // pointer lock was rejected. The warning, click-to-play, and pause must
-    // not burn the 2 s grace or leave a burst to land on resume.
+    // not burn the spawn grace or leave a burst to land on resume.
     wisps.update(simDt, body.position);
     enforcers.update(simDt, body.position);
   }

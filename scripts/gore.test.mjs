@@ -22,6 +22,7 @@ import { damagePlayer } from "../src/player/hurt.ts";
 import { createPlayerState } from "../src/player/state.ts";
 import { createQuill } from "../src/quill.ts";
 import { WISP_FLUID_COLOR, WISP_GIB_METAL, WISP_GIB_PLASTIC } from "../src/wisp.ts";
+import { WAVE_GAP_SECONDS } from "../src/waves.ts";
 
 const DT = 1 / 120;
 
@@ -198,7 +199,7 @@ test("the player, a pickup, and a shot into the atrium do not gib", () => {
   const down = { x: 0, y: -1, z: 0 };
   quill.update(0, { fire: true, presses: 1, reload: false, origin, direction: down });
   quill.update(0.3, { fire: false, presses: 0, reload: false, origin, direction: down });
-  assert.equal(fight.enforcers.aliveCount(), 1);
+  assert.equal(fight.enforcers.aliveCount(), 0);
   assert.equal(fight.wisps.aliveCount(), 2);
   quiet(fight);
 
@@ -218,7 +219,11 @@ test("restart clears enforcer blood and drone scraps", () => {
     hitboxes: createHitboxWorld(),
     origin: ATRIUM_SPAWN,
   });
+  fight.killAll();
+  step(fight, WAVE_GAP_SECONDS + 0.05, ATRIUM_SPAWN);
+  assert.equal(fight.wisps.wave, 2);
   const index = fight.enforcers.units.findIndex((unit) => unit.alive);
+  assert.ok(index >= 0, "wave 2 did not field an enforcer");
   fight.enforcers.hurt(index, 999);
   fight.wisps.hurt(0, 100);
   assert.ok(aliveCount(fight.enforcers.spray) > 0);

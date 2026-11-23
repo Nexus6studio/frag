@@ -1,11 +1,11 @@
 // Endless wave counts. There is no last wave and no arena clear.
 //
-// The GDD schedule is waveComposition. Wave 1 is 2 drones and 1 enforcer.
-// Each clear adds one drone. A second enforcer arrives on wave 3. The cap is
-// 4 drones and 2 enforcers, and it stays there forever.
+// The GDD schedule is waveComposition. Wave 1 is 2 drones. The first
+// enforcer arrives on wave 2. Each clear adds one drone. A second enforcer
+// arrives on wave 3. The cap is 4 drones and 2 enforcers, and it stays there.
 //
 // ENFORCER_ENABLED gates the live spawner. The count below is what a wave
-// fields when the flag is on: 2+1, 3+1, then 4+2 forever.
+// fields when the flag is on: 2+0, 3+1, then 4+2 forever.
 
 export const ENFORCER_ENABLED = true;
 
@@ -32,7 +32,7 @@ export function waveComposition(wave: number): WavePlan {
   const n = Math.max(1, Math.floor(wave));
   return {
     drones: Math.min(DRONE_CAP, n + 1),
-    enforcers: Math.min(ENFORCER_CAP, n >= 3 ? 2 : 1),
+    enforcers: Math.min(ENFORCER_CAP, n <= 1 ? 0 : n >= 3 ? 2 : 1),
   };
 }
 
