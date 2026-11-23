@@ -144,6 +144,15 @@ const RECIPES: Record<CueId, Recipe> = {
     tones: [{ type: "sine", from: 96, to: 48, dur: 0.09, gain: 0.22, at: 0 }],
     noise: [{ dur: 0.04, gain: 0.06, freq: 200, at: 0 }],
   },
+  // Rising sweep. The jump pad calls this once per launch.
+  whoosh: {
+    dur: 0.34,
+    tones: [
+      { type: "sawtooth", from: 180, to: 720, dur: 0.28, gain: 0.07, at: 0 },
+      { type: "sine", from: 360, to: 1280, dur: 0.32, gain: 0.09, at: 0.02 },
+    ],
+    noise: [{ dur: 0.18, gain: 0.05, freq: 1400, at: 0 }],
+  },
 };
 
 function chirp(root: number): Recipe {

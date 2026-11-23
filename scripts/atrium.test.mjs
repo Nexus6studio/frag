@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ATRIUM_JUMP_PADS,
   ATRIUM_PADS,
   ATRIUM_RAMPS,
   ATRIUM_SPAWN,
   ATRIUM_STAIRS,
   CATWALK_Y,
+  CEILING_Y,
   CONCOURSE,
   GROUND_Y,
   KILL_Y,
@@ -21,6 +23,7 @@ import {
 } from "../src/atrium.ts";
 import {
   CAMERA_NEAR,
+  CAPSULE_HEIGHT,
   CAPSULE_RADIUS,
   EYE_HEIGHT,
   SIM_DT,
@@ -136,6 +139,72 @@ test("the seven pads sit on the atrium landmarks", () => {
   const landing = of("ammo").find((pad) => pad.position.x > 0 && pad.position.z < -RING_INNER);
   assert.ok(landing);
   assert.equal(landing.position.y, CATWALK_Y);
+});
+
+test("both center-well jump pads land on the upper ring", () => {
+  assert.equal(ATRIUM_JUMP_PADS.length, 2);
+  const east = ATRIUM_JUMP_PADS.find((pad) => pad.id === "east");
+  const west = ATRIUM_JUMP_PADS.find((pad) => pad.id === "west");
+  assert.ok(east && west);
+  assert.ok(east.x > 0 && west.x < 0);
+  assert.ok(Math.abs(east.x) < WELL_HALF && Math.abs(west.x) < WELL_HALF);
+  assert.ok(Math.abs(east.z) < WELL_HALF && Math.abs(west.z) < WELL_HALF);
+  for (const pad of ATRIUM_JUMP_PADS) {
+    for (const pickup of ATRIUM_PADS) {
+      const gap = Math.hypot(pad.x - pickup.position.x, pad.z - pickup.position.z);
+      assert.ok(gap > 2, `${pad.id} is ${gap.toFixed(2)} m from a ${pickup.kind} pad`);
+    }
+    const spawnGap = Math.hypot(pad.x - ATRIUM_SPAWN.x, pad.z - ATRIUM_SPAWN.z);
+    assert.ok(spawnGap > 4, `${pad.id} is ${spawnGap.toFixed(2)} m from spawn`);
+  }
+
+  const ride = (start, intent, label) => {
+    let state = createMoveState(start);
+    let launches = 0;
+    let peak = start.y;
+    let landed = null;
+    const limit = Math.round(3.5 / SIM_DT);
+    for (let i = 0; i < limit; i += 1) {
+      state = stepAtrium(state, intent, SIM_DT, () => {
+        launches += 1;
+      });
+      if (state.position.y > peak) peak = state.position.y;
+      const head = state.position.y + CAPSULE_HEIGHT;
+      assert.ok(head < CEILING_Y - 0.05, `${label} head ${head.toFixed(2)} met the ceiling`);
+      assert.equal(needsRespawn(state.position), false, `${label} left the atrium`);
+      assert.ok(Math.abs(state.position.x) <= MAP_HALF, `${label} x ${state.position.x}`);
+      assert.ok(Math.abs(state.position.z) <= MAP_HALF, `${label} z ${state.position.z}`);
+      assert.ok(state.position.y > KILL_Y, `${label} fell to ${state.position.y}`);
+      if (!landed && i > 5 && state.grounded && state.position.y >= 5.3) landed = { ...state.position };
+      if (landed) break;
+    }
+    assert.equal(launches, 1, `${label} launches ${launches}`);
+    assert.ok(peak >= 5.3, `${label} peaked at ${peak}`);
+    assert.ok(landed, `${label} did not land on the upper ring`);
+    assert.ok(landed.y >= 5.3 && landed.y < PARAPET_Y - 0.4, `${label} landed at y ${landed.y}`);
+    assert.ok(Math.abs(landed.x) >= RING_INNER - 0.05, `${label} landed at x ${landed.x}, short of the catwalk`);
+    assert.equal(state.grounded, true, `${label} was still airborne`);
+    return landed;
+  };
+
+  const stillRide = { forward: 0, strafe: 0, jump: false, yawDeg: 0 };
+  for (const pad of ATRIUM_JUMP_PADS) {
+    const landed = ride({ x: pad.x, y: 0, z: pad.z }, stillRide, `${pad.id} stand`);
+    assert.ok(Math.sign(landed.x) === Math.sign(pad.dirX), `${pad.id} launched the wrong way`);
+  }
+
+  ride({ x: 2, y: 0, z: 0 }, { forward: 1, strafe: 0, jump: false, yawDeg: -90 }, "walk east");
+  ride({ x: -2, y: 0, z: 0 }, { forward: 1, strafe: 0, jump: false, yawDeg: 90 }, "walk west");
+
+  let idle = createMoveState({ x: 0, y: 0, z: 0 });
+  let idleLaunches = 0;
+  for (let i = 0; i < Math.round(0.5 / SIM_DT); i += 1) {
+    idle = stepAtrium(idle, stillRide, SIM_DT, () => {
+      idleLaunches += 1;
+    });
+  }
+  assert.equal(idleLaunches, 0);
+  assert.ok(idle.position.y < 0.2, `well center climbed to ${idle.position.y}`);
 });
 
 test("a jump from the well floor cannot reach the catwalk", () => {
@@ -557,6 +626,20 @@ test("the drawn atrium stays inside the triangle and mesh budget", async () => {
   const view = buildAtriumView();
   assert.ok(view.triangles > 100 && view.triangles <= 50_000, `triangles ${view.triangles}`);
   assert.ok(view.meshes.length > 0 && view.meshes.length <= 16, `meshes ${view.meshes.length}`);
+  const jumpPads = view.meshes.find((mesh) => mesh.name === "atrium-jump-pads");
+  assert.ok(jumpPads, "jump pad chevrons are not drawn");
+  const colors = jumpPads.geometry.getAttribute("color");
+  assert.ok(colors && colors.count > 12);
+  let cyan = 0;
+  let magenta = 0;
+  for (let i = 0; i < colors.count; i += 1) {
+    const r = colors.getX(i);
+    const g = colors.getY(i);
+    const b = colors.getZ(i);
+    if (b > 0.8 && g > 0.7 && r < 0.2) cyan += 1;
+    if (r > 0.8 && b > 0.4 && g < 0.4) magenta += 1;
+  }
+  assert.ok(cyan > 0 && magenta > 0, `chevron colors cyan ${cyan} magenta ${magenta}`);
   console.log(`atrium meshes ${view.meshes.length} triangles ${view.triangles}`);
 });
 

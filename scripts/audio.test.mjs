@@ -29,7 +29,69 @@ const EVENTS = [
   { type: "pickup", kind: "armor" },
   { type: "pickup", kind: "ammo" },
   { type: "player-hurt" },
+  { type: "jump-pad" },
 ];
+
+test("the jump-pad whoosh sweeps upward", () => {
+  const starts = [];
+  const ends = [];
+  const ctx = {
+    state: "running",
+    currentTime: 0,
+    destination: {},
+    sampleRate: 8000,
+    resume() {},
+    createGain() {
+      return {
+        gain: { value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+        connect() {},
+        disconnect() {},
+      };
+    },
+    createOscillator() {
+      return {
+        type: "sine",
+        frequency: {
+          value: 0,
+          setValueAtTime(value) {
+            starts.push(value);
+          },
+          exponentialRampToValueAtTime(value) {
+            ends.push(value);
+          },
+        },
+        connect() {},
+        start() {},
+        stop() {},
+        disconnect() {},
+        onended: null,
+      };
+    },
+    createBiquadFilter() {
+      return {
+        type: "lowpass",
+        frequency: { value: 0, setValueAtTime() {}, linearRampToValueAtTime() {} },
+        Q: { value: 0 },
+        connect() {},
+        disconnect() {},
+      };
+    },
+    createBuffer() {
+      return { getChannelData: () => new Float32Array(8) };
+    },
+    createBufferSource() {
+      return { buffer: null, connect() {}, start() {}, stop() {}, disconnect() {}, onended: null };
+    },
+  };
+  const audio = createAudio({ AudioContext: class { constructor() { return ctx; } } });
+  audio.prime();
+  audio.play("whoosh");
+  assert.ok(starts.length >= 2, `whoosh tones ${starts.length}`);
+  assert.equal(ends.length, starts.length);
+  for (let i = 0; i < starts.length; i += 1) {
+    assert.ok(ends[i] > starts[i], `whoosh ${starts[i]} did not rise to ${ends[i]}`);
+  }
+});
 
 test("each sim event maps to its own cue", () => {
   const cues = EVENTS.map((event) => cueFor(event));
@@ -46,6 +108,7 @@ test("each sim event maps to its own cue", () => {
     "armor",
     "ammo",
     "hurt",
+    "whoosh",
   ]);
   assert.equal(new Set(cues).size, cues.length);
   assert.notEqual(cuePitch("health"), cuePitch("armor"));

@@ -7,6 +7,7 @@ import {
   KILL_Y,
   MAP_HALF,
   createAtriumHull,
+  createAtriumMover,
   needsRespawn,
 } from "../src/atrium.ts";
 import { restartCombat } from "../src/combat.ts";
@@ -19,7 +20,6 @@ import {
   EYE_HEIGHT,
   SIM_DT,
   createMoveState,
-  createMover,
 } from "../src/move.ts";
 import { createPickupSim } from "../src/pickups.ts";
 import { createPlayerState } from "../src/player/state.ts";
@@ -57,7 +57,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   const fight = createFight({ hull, player, hitboxes, origin: ATRIUM_SPAWN });
   const wisps = fight.wisps;
   const enforcers = fight.enforcers;
-  let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+  let mover = createAtriumMover(createMoveState(ATRIUM_SPAWN));
 
   const scene = new Scene();
   const atrium = addAtrium(scene);
@@ -103,7 +103,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       wisps,
       origin: ATRIUM_SPAWN,
     });
-    mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+    mover = createAtriumMover(createMoveState(ATRIUM_SPAWN));
     for (let i = 0; i < wisps.drones.length; i += 1) {
       previous[i].x = wisps.drones[i].position.x;
       previous[i].y = wisps.drones[i].position.y;
@@ -162,7 +162,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       yawDeg: yaw,
     });
     if (needsRespawn(mover.state.position)) {
-      mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+      mover = createAtriumMover(createMoveState(ATRIUM_SPAWN));
     }
 
     const body = mover.state;

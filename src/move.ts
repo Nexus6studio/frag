@@ -257,7 +257,11 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
   };
 }
 
-export function createMover(hull: Hull, initial?: MoveState): {
+export function createMover(
+  hull: Hull,
+  initial?: MoveState,
+  step: (state: MoveState, intent: MoveIntent, dt: number, hull: Hull) => MoveState = stepMovement,
+): {
   readonly state: MoveState;
   advance(frameSeconds: number, intent: MoveIntent): MoveState;
 } {
@@ -277,7 +281,7 @@ export function createMover(hull: Hull, initial?: MoveState): {
       const maxSteps = Math.ceil(MAX_FRAME_SECONDS / SIM_DT) + 2;
       let steps = 0;
       while (accumulator >= SIM_DT && steps < maxSteps) {
-        state = stepMovement(state, intent, SIM_DT, hull);
+        state = step(state, intent, SIM_DT, hull);
         accumulator -= SIM_DT;
         steps += 1;
       }

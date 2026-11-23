@@ -14,7 +14,8 @@ export type SimEvent =
   | { type: "wisp-shot" }
   | { type: "enforcer-shot" }
   | { type: "pickup"; kind: "health" | "armor" | "ammo" }
-  | { type: "player-hurt" };
+  | { type: "player-hurt" }
+  | { type: "jump-pad" };
 
 export type CueId =
   | "flechette"
@@ -28,7 +29,8 @@ export type CueId =
   | "health"
   | "armor"
   | "ammo"
-  | "hurt";
+  | "hurt"
+  | "whoosh";
 
 export type CueListener = (event: SimEvent) => void;
 
@@ -54,6 +56,8 @@ export function cueFor(event: SimEvent): CueId {
       return event.kind;
     case "player-hurt":
       return "hurt";
+    case "jump-pad":
+      return "whoosh";
   }
 }
 
