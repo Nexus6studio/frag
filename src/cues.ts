@@ -64,13 +64,14 @@ export function cueFor(event: SimEvent): CueId {
 /**
  * Fundamental in hertz for the cues that are pitched on purpose.
  * Health, armor, and ammo do not share one. The kill chime is not the hit tick.
+ * Each one sits under 900 Hz, below the band the short cues used to pierce.
  */
 export function cuePitch(cue: CueId): number | null {
-  if (cue === "health") return 523.25;
-  if (cue === "armor") return 659.25;
-  if (cue === "ammo") return 880;
-  if (cue === "kill") return 740;
-  if (cue === "hit") return 3100;
+  if (cue === "health") return 349.23;
+  if (cue === "armor") return 440;
+  if (cue === "ammo") return 523.25;
+  if (cue === "kill") return 466;
+  if (cue === "hit") return 840;
   return null;
 }
 
