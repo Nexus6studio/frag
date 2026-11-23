@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import {
   ARC_CAP,
@@ -30,6 +31,11 @@ import { damagePlayer, subscribePlayerHurt } from "../src/player/hurt.ts";
 import { createPlayerState } from "../src/player/state.ts";
 
 const eye = { x: 0, y: 1.45, z: 0 };
+
+/** Distance from a viewport-fraction point to the nearest screen edge. 0 means on the edge. */
+function edgeGap(point) {
+  return Math.min(point.x, point.y, 1 - point.x, 1 - point.y);
+}
 
 test("a hit marker lasts 80 ms and a kill is a larger flash that a hit cannot downgrade", () => {
   let marker = noteMarker(freshMarker(), false);
@@ -85,8 +91,8 @@ test("off-center damage places the arc toward the attacker", () => {
   const aheadRight = damageBearing(0, eye, { x: 1, y: 1.45, z: -Math.sqrt(3) });
   assert.ok(Math.abs(aheadRight - Math.PI / 6) < 1e-6, `diagonal bearing ${aheadRight}`);
   const diagonal = arcAnchor(aheadRight);
-  assert.ok(diagonal.x > 0.5 && diagonal.x < 0.9, `diagonal x ${diagonal.x}`);
-  assert.ok(diagonal.y < 0.5 && diagonal.y > 0.05, `diagonal y ${diagonal.y}`);
+  assert.ok(diagonal.x > 0.5 && diagonal.y < 0.5, `diagonal stays ahead-right (${diagonal.x}, ${diagonal.y})`);
+  assert.ok(edgeGap(diagonal) <= 0.02, `diagonal arc floats inside the view (${diagonal.x}, ${diagonal.y})`);
 
   // Yaw -90 looks toward +X. A threat still on -Z is then to the left.
   const turned = damageBearing(-90, eye, { x: 8, y: 1.45, z: 0 });
@@ -96,6 +102,65 @@ test("off-center damage places the arc toward the attacker", () => {
   assert.ok(arcAnchor(flank).x < 0.1);
 
   assert.ok(Number.isNaN(damageBearing(0, eye, { x: 0.01, y: 4, z: 0 })));
+});
+
+test("the damage crescent's outer peak hugs the viewport edge", () => {
+  const bearings = [0, Math.PI / 2, -Math.PI / 2, Math.PI, Math.PI / 6, -Math.PI / 5, 1.15, 2.2, -2.2, 2.8];
+  for (const bearing of bearings) {
+    const arc = arcAnchor(bearing);
+    const gap = edgeGap(arc);
+    assert.ok(gap <= 0.02, `bearing ${bearing.toFixed(3)} sits inset by ${gap.toFixed(3)} at ${arc.x.toFixed(3)}, ${arc.y.toFixed(3)}`);
+    assert.ok(arc.x >= -1e-6 && arc.x <= 1 + 1e-6, `x left the viewport (${arc.x})`);
+    assert.ok(arc.y >= -1e-6 && arc.y <= 1 + 1e-6, `y left the viewport (${arc.y})`);
+    const reach = Math.hypot(arc.x - 0.5, arc.y - 0.5);
+    assert.ok(reach >= 0.5 - 1e-6, `bearing ${bearing.toFixed(3)} reach ${reach.toFixed(3)} stops short of the edge`);
+    const dx = arc.x - 0.5;
+    const dy = arc.y - 0.5;
+    const rayX = Math.sin(bearing);
+    const rayY = -Math.cos(bearing);
+    const cross = dx * rayY - dy * rayX;
+    assert.ok(Math.abs(cross) < 1e-6, `bearing ${bearing.toFixed(3)} left its ray (${cross})`);
+  }
+});
+
+test("the damage crescent is at least three times the old 4px stroke and hangs inward from its peak", () => {
+  const css = fs.readFileSync(new URL("../src/hud/hud.css", import.meta.url), "utf8");
+  const block = css.match(/\.damage-arc\s*\{([^}]+)\}/);
+  assert.ok(block, "damage-arc rule missing");
+  const border = block[1].match(/border:\s*(\d+(?:\.\d+)?)px/);
+  assert.ok(border, "damage-arc border thickness missing");
+  const thickness = Number(border[1]);
+  const previousThickness = 4;
+  assert.ok(
+    thickness >= previousThickness * 3,
+    `stroke is ${thickness}px, under ${previousThickness * 3}px (3x the previous arc)`,
+  );
+  assert.match(block[1], /transform-origin:\s*center top/, "crescent does not pivot on its outer peak");
+
+  const hud = fs.readFileSync(new URL("../src/hud/hud.ts", import.meta.url), "utf8");
+  assert.match(hud, /translate\(-50%, 0\) rotate/, "arc is still centered on the anchor instead of hanging inward from the edge");
+  assert.doesNotMatch(hud, /translate\(-50%, -50%\)/, "arc element is centered, so the ring floats inside the edge");
+});
+
+test("three stacked arcs stay on the opacity cap without raising it", () => {
+  assert.equal(ARC_OPACITY_BUDGET, 1.35);
+  assert.equal(ARC_CAP, 3);
+  assert.equal(ARC_LIFE_SECONDS, 0.4);
+
+  let arcs = pushDamage([], 0);
+  arcs = pushDamage(arcs, 1.2);
+  arcs = pushDamage(arcs, 2.4);
+  assert.equal(arcs.length, 3, "three separated hits did not keep three arcs");
+  const painted = paintDamage(arcs);
+  assert.equal(painted.length, 3);
+  let sum = 0;
+  for (const arc of painted) sum += arc.opacity;
+  assert.ok(Math.abs(sum - 1.35) < 1e-6, `three fresh arcs summed to ${sum}, cap is 1.35`);
+  assert.ok(painted.every((arc) => arc.opacity < 0.7), "stacked arcs were not dimmed under the cap");
+
+  const single = paintDamage(pushDamage([], 0.4));
+  assert.equal(single.length, 1);
+  assert.ok(single[0].opacity > painted[0].opacity, "a lone arc was dimmed like a stack");
 });
 
 test("overlapping damage arcs fade, merge, and stay under the opacity budget", () => {

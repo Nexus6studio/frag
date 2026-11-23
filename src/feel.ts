@@ -26,8 +26,6 @@ export const ARC_OPACITY_BUDGET = 1.35;
 /** A new hit this close to a live arc refreshes that arc instead of stacking. */
 export const ARC_MERGE_RAD = 0.4;
 const ARC_PEAK = 0.82;
-/** How far from the viewport center an arc sits, as a fraction of the view. */
-const ARC_REACH = 0.46;
 
 export const VIEW_REST = { x: 0.2, y: -0.22, z: -0.38 } as const;
 /** Rear of the carbine in viewmodel space. +Z points back toward the camera. */
@@ -121,12 +119,23 @@ export function damageBearing(yawDeg: number, eye: Vec3, source: Vec3): number {
   return wrapPi(Math.atan2(right, forward));
 }
 
-/** Place the arc on the screen edge in the direction of the attacker. */
+/**
+ * Outer peak of the damage crescent, in viewport fractions.
+ * The peak sits on the screen rectangle in the attacker's direction.
+ * The crescent is drawn inward from that peak, so a diagonal does not float inside the view.
+ */
 export function arcAnchor(bearing: number): { x: number; y: number; rotation: number } {
   const angle = wrapPi(bearing);
+  const dx = Math.sin(angle);
+  const dy = -Math.cos(angle);
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  const tx = ax > 1e-8 ? 0.5 / ax : Number.POSITIVE_INFINITY;
+  const ty = ay > 1e-8 ? 0.5 / ay : Number.POSITIVE_INFINITY;
+  const t = Math.min(tx, ty);
   return {
-    x: 0.5 + ARC_REACH * Math.sin(angle),
-    y: 0.5 - ARC_REACH * Math.cos(angle),
+    x: clamp(0.5 + dx * t, 0, 1),
+    y: clamp(0.5 + dy * t, 0, 1),
     rotation: angle,
   };
 }

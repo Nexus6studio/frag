@@ -217,7 +217,8 @@ export function mountHud(
         el.style.left = `${(arc.x * 100).toFixed(2)}%`;
         el.style.top = `${(arc.y * 100).toFixed(2)}%`;
         el.style.opacity = arc.opacity.toFixed(3);
-        el.style.transform = `translate(-50%, -50%) rotate(${arc.rotation.toFixed(4)}rad)`;
+        // arc.x/y is the outer peak. translate(-50%, 0) plus center-top origin parks that peak on the edge.
+        el.style.transform = `translate(-50%, 0) rotate(${arc.rotation.toFixed(4)}rad)`;
       }
     },
   };
