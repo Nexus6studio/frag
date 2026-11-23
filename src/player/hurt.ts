@@ -1,8 +1,7 @@
-// The only place a WISP-4 bolt changes the player.
+// The only place a WISP-4 bolt or a UNIT-7 stun blast changes the player.
 //
-// Bolts call applyDamage, so armor absorbs min(A, floor(D·2/3)) and the rest
-// comes off HP. Armor is 0 in this release, which makes an 8-damage bolt
-// remove 8 HP.
+// Both call applyDamage, so armor absorbs min(A, floor(D·2/3)) and the rest
+// comes off HP. A hit that would remove less than 1 HP still removes 1.
 
 import { applyDamage } from "../pickups.ts";
 import type { PlayerStore } from "./state.ts";

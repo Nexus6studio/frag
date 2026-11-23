@@ -3,9 +3,8 @@ import { formatClock, type DeathRecap } from "../waves.ts";
 
 export type { DeathRecap };
 
-// Armor is deferred. The readout stays invisible, and the slot keeps its box
-// so turning this on later does not move HP or ammo.
-export const SHOW_ARMOR = false;
+// The armor readout sits between HP and ammo and uses the same label size.
+export const SHOW_ARMOR = true;
 
 export type HudMode = "hidden" | "play" | "dim" | "dead";
 

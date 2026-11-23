@@ -34,6 +34,8 @@ import {
 import {
   AMMO_COLOR,
   AMMO_DORMANT,
+  ARMOR_COLOR,
+  ARMOR_DORMANT,
   ARMOR_ENABLED,
   HEALTH_COLOR,
   HEALTH_DORMANT,
@@ -45,8 +47,6 @@ const CONCRETE = 0x1a1d24;
 const CYAN = 0x00e5ff;
 const MAGENTA = 0xff2e9f;
 const AMBER = 0xf5a623;
-const ARMOR_COLOR = 0x00e5ff;
-const ARMOR_DORMANT = 0x06343d;
 
 class Soup {
   readonly position: number[] = [];
@@ -341,15 +341,18 @@ function addAmmoShape(soup: Soup, pad: AtriumPad): void {
   }
 }
 
-/** Square shell. Drawn only when ARMOR_ENABLED is on. */
+/** Cyan vest plate standing on a lit pad. Drawn when ARMOR_ENABLED is on. */
 function addArmorShape(soup: Soup, pad: AtriumPad): void {
   const { x, z } = pad.position;
   const y = pad.position.y + 0.02;
-  soup.box(x - 0.28, x + 0.28, y, y + 0.08, z - 0.28, z - 0.16);
-  soup.box(x - 0.28, x + 0.28, y, y + 0.08, z + 0.16, z + 0.28);
-  soup.box(x - 0.28, x - 0.16, y, y + 0.08, z - 0.16, z + 0.16);
-  soup.box(x + 0.16, x + 0.28, y, y + 0.08, z - 0.16, z + 0.16);
-  soup.box(x - 0.08, x + 0.08, y + 0.08, y + 0.36, z - 0.08, z + 0.08);
+  soup.box(x - 0.34, x + 0.34, y, y + 0.045, z - 0.24, z + 0.24);
+  soup.box(x - 0.38, x + 0.38, y + 0.045, y + 0.07, z - 0.28, z - 0.22);
+  soup.box(x - 0.38, x + 0.38, y + 0.045, y + 0.07, z + 0.22, z + 0.28);
+  soup.box(x - 0.38, x - 0.32, y + 0.045, y + 0.07, z - 0.22, z + 0.22);
+  soup.box(x + 0.32, x + 0.38, y + 0.045, y + 0.07, z - 0.22, z + 0.22);
+  soup.box(x - 0.15, x + 0.15, y + 0.07, y + 0.48, z - 0.04, z + 0.04);
+  soup.box(x - 0.2, x - 0.08, y + 0.36, y + 0.54, z - 0.03, z + 0.03);
+  soup.box(x + 0.08, x + 0.2, y + 0.36, y + 0.54, z - 0.03, z + 0.03);
 }
 
 function buildPadViews(): { pads: PadView[]; triangles: number } {
