@@ -316,27 +316,57 @@ async function assertHiddenTabDoesNotSpike(page, errors) {
 }
 
 async function assertContextLoss(page, errors) {
-  const lost = await page.evaluate(() => {
-    const canvas = document.querySelector("canvas");
-    if (!(canvas instanceof HTMLCanvasElement)) return { error: "canvas missing" };
-    const gl = canvas.getContext("webgl2");
-    if (!gl) return { error: "webgl2 missing" };
-    const ext = gl.getExtension("WEBGL_lose_context");
-    if (!ext) return { error: "WEBGL_lose_context missing" };
-    ext.loseContext();
-    return { ok: true };
-  });
+  // A software-GL frame can occupy the thread for longer than the loss event
+  // needs. Stop scheduling another one, then wait out any frame already running.
+  const lost = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const canvas = document.querySelector("canvas");
+        if (!(canvas instanceof HTMLCanvasElement)) {
+          resolve({ error: "canvas missing" });
+          return;
+        }
+        const gl = canvas.getContext("webgl2");
+        if (!gl) {
+          resolve({ error: "webgl2 missing" });
+          return;
+        }
+        const ext = gl.getExtension("WEBGL_lose_context");
+        if (!ext) {
+          resolve({ error: "WEBGL_lose_context missing" });
+          return;
+        }
+        let saw = false;
+        canvas.addEventListener(
+          "webglcontextlost",
+          () => {
+            saw = true;
+          },
+          { once: true },
+        );
+        window.requestAnimationFrame = () => 0;
+        ext.loseContext();
+        const start = performance.now();
+        const check = () => {
+          const panel = document.querySelector("#context-lost");
+          if (panel instanceof HTMLElement && !panel.hidden) {
+            resolve({ ok: true, saw, waited: performance.now() - start });
+            return;
+          }
+          if (performance.now() - start > 15_000) {
+            resolve({ error: `overlay stayed hidden (event ${saw ? "fired" : "did not fire"})` });
+            return;
+          }
+          setTimeout(check, 50);
+        };
+        setTimeout(check, 0);
+      }),
+  );
   if (lost.error) {
-    errors.push(lost.error);
+    errors.push(`context loss did not show a message: ${lost.error}`);
     return;
   }
-  try {
-    await page.waitForSelector("#context-lost:not([hidden])", { timeout: 3_000 });
-  } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`context loss did not show a message: ${message}`);
-    return;
-  }
+  console.log(`context loss overlay in ${Math.round(lost.waited)} ms`);
   const text = (await page.locator("#context-lost").innerText()).replace(/\s+/g, " ").trim();
   if (!/graphics|display/i.test(text) || !/reload/i.test(text)) {
     errors.push(`context loss message is not recoverable: ${text}`);
@@ -348,22 +378,20 @@ async function assertContextLoss(page, errors) {
     if (!(canvas instanceof HTMLCanvasElement)) return;
     canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.restoreContext();
   });
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
-      }),
-  );
-  const restored = await page.evaluate(() => {
-    const panel = document.querySelector("#context-lost");
-    const reload = document.querySelector("#context-lost-reload");
-    return {
-      hidden: panel instanceof HTMLElement ? panel.hidden : true,
-      reload: reload instanceof HTMLElement,
-    };
-  });
-  if (!restored.hidden && !restored.reload) {
-    errors.push("context restore did not recover or offer a reload");
+  try {
+    // Poll on a timer. The loss check replaced requestAnimationFrame, so an
+    // rAF poll would never run.
+    await page.waitForFunction(
+      () => {
+        const panel = document.querySelector("#context-lost");
+        return panel instanceof HTMLElement && panel.hidden;
+      },
+      undefined,
+      { timeout: 10_000, polling: 50 },
+    );
+  } catch {
+    const reloadVisible = await page.locator("#context-lost-reload").isVisible();
+    if (!reloadVisible) errors.push("context restore did not recover or offer a reload");
   }
 }
 

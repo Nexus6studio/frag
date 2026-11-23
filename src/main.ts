@@ -183,7 +183,10 @@ function hideContextLost(): void {
 
 renderer.domElement.addEventListener("webglcontextlost", (event) => {
   event.preventDefault();
-  showContextLost();
+  // The panel is queried again so a loss still has a message if the first lookup missed.
+  const panel = contextLostPanel ?? document.querySelector<HTMLElement>("#context-lost");
+  contextLost = true;
+  if (panel) panel.hidden = false;
 });
 
 renderer.domElement.addEventListener("webglcontextrestored", () => {
