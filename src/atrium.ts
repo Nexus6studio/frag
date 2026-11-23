@@ -11,7 +11,8 @@
 //   parapet       2 m band at |coord| 11–13, top y = 6.6 (inner rail)
 //   catwalk       outer 3 m (|coord| 13–16) at y = 5.3
 //   NE/NW ramps   4.5 m rise over 4.8 m, climbing toward -Z onto the north ring
-//   SE/SW stairs  0.50 m treads, 0.30 m rises, up to the east and west rings
+//   SE/SW stairs  0.50 m treads, 0.30 m rises, climbing +Z off the ground ring
+//                 onto landings that meet the east and west catwalks
 // Walls close the 32×32 m footprint. Falling through the floor respawns on
 // the south concourse.
 
@@ -56,13 +57,13 @@ export interface AtriumPad {
 
 export interface AtriumStair {
   id: "se" | "sw";
-  /** +1 climbs toward +X, -1 toward -X. */
-  dir: 1 | -1;
+  /** Cross-axis bounds. The flight is this wide in X and climbs toward +Z. */
   x0: number;
   x1: number;
+  /** Z of the low end, where the first riser leaves the ground ring. */
   z0: number;
-  z1: number;
-  lineZ: number;
+  /** Outer X of the upper landing, on the catwalk side of the parapet. */
+  landFar: number;
 }
 
 export interface AtriumRamp {
@@ -76,28 +77,38 @@ export interface AtriumRamp {
   lineX: number;
 }
 
-const STAIR_Z0 = 8.5;
-const STAIR_Z1 = 10.7;
-const STAIR_X0 = 1.6;
+/**
+ * Low end of both south flights. An east-west flight used to sit at z = 8.5,
+ * so its north face was one plain wall from about x = -13 to x = -2. A capsule
+ * walking south on the ground ring stopped at z = 8.5 - radius (8.15) and could
+ * not reach the upper ring. The flights now climb south from this mouth, and
+ * the tall side sits against the outer parapet instead of across the concourse.
+ */
+export const STAIR_MOUTH_Z = 2.4;
+/** Z where the last riser reaches the catwalk, and the landing turns outward. */
+export const STAIR_LAND_Z0 = STAIR_MOUTH_Z + (STAIR_COUNT - 1) * STAIR_DEPTH;
+/** Landing runs into the south parapet so the doorway has no gap at the seam. */
+export const STAIR_LAND_Z1 = CONCOURSE + 0.02;
+
+const FLIGHT_WEST_X0 = -11.02;
+const FLIGHT_WEST_X1 = -8.75;
+const FLIGHT_EAST_X0 = 8.75;
+const FLIGHT_EAST_X1 = 11.02;
 
 export const ATRIUM_STAIRS: readonly AtriumStair[] = [
   {
-    id: "se",
-    dir: 1,
-    x0: STAIR_X0,
-    x1: STAIR_X0 + STAIR_COUNT * STAIR_DEPTH,
-    z0: STAIR_Z0,
-    z1: STAIR_Z1,
-    lineZ: (STAIR_Z0 + STAIR_Z1) / 2,
+    id: "sw",
+    x0: FLIGHT_WEST_X0,
+    x1: FLIGHT_WEST_X1,
+    z0: STAIR_MOUTH_Z,
+    landFar: -(RING_INNER + 0.15),
   },
   {
-    id: "sw",
-    dir: -1,
-    x0: -STAIR_X0,
-    x1: -(STAIR_X0 + STAIR_COUNT * STAIR_DEPTH),
-    z0: STAIR_Z0,
-    z1: STAIR_Z1,
-    lineZ: (STAIR_Z0 + STAIR_Z1) / 2,
+    id: "se",
+    x0: FLIGHT_EAST_X0,
+    x1: FLIGHT_EAST_X1,
+    z0: STAIR_MOUTH_Z,
+    landFar: RING_INNER + 0.15,
   },
 ];
 
@@ -159,18 +170,21 @@ function box(boxes: BoxSolid[], x0: number, x1: number, y0: number, y1: number, 
   });
 }
 
-function stairBoxes(boxes: BoxSolid[], stair: AtriumStair): void {
-  const z0 = Math.min(stair.z0, stair.z1);
-  const z1 = Math.max(stair.z0, stair.z1);
+/** Treads, the flat top, and the landing. The same boxes are drawn in floor.ts. */
+export function stairCollisionBoxes(stair: AtriumStair): BoxSolid[] {
+  const boxes: BoxSolid[] = [];
+  const x0 = Math.min(stair.x0, stair.x1);
+  const x1 = Math.max(stair.x0, stair.x1);
   for (let i = 0; i < STAIR_COUNT; i += 1) {
-    const along0 = i * STAIR_DEPTH;
-    const along1 = (i + 1) * STAIR_DEPTH;
-    const x0 = stair.dir === 1 ? stair.x0 + along0 : stair.x0 - along1;
-    const x1 = stair.dir === 1 ? stair.x0 + along1 : stair.x0 - along0;
-    box(boxes, x0, x1, 0, GROUND_Y + (i + 1) * STAIR_RISE, z0, z1);
+    const zLo = stair.z0 + i * STAIR_DEPTH;
+    const zHi = stair.z0 + (i + 1) * STAIR_DEPTH;
+    box(boxes, x0, x1, 0, GROUND_Y + (i + 1) * STAIR_RISE, zLo, zHi);
   }
-  const landFar = stair.dir === 1 ? RING_INNER + 0.15 : -(RING_INNER + 0.15);
-  box(boxes, stair.x1, landFar, 0, CATWALK_Y, z0, z1);
+  const flightEnd = stair.z0 + STAIR_COUNT * STAIR_DEPTH;
+  box(boxes, x0, x1, 0, CATWALK_Y, flightEnd, STAIR_LAND_Z1);
+  const landNear = stair.landFar < x0 ? x0 : x1;
+  box(boxes, landNear, stair.landFar, 0, CATWALK_Y, STAIR_LAND_Z0, STAIR_LAND_Z1);
+  return boxes;
 }
 
 function buildHull(): Hull {
@@ -194,12 +208,10 @@ function buildHull(): Hull {
   box(boxes, -RING_INNER, -10.2, 0, PARAPET_Y, -RING_INNER, -CONCOURSE);
   box(boxes, -7.6, 7.6, 0, PARAPET_Y, -RING_INNER, -CONCOURSE);
   box(boxes, 10.2, RING_INNER, 0, PARAPET_Y, -RING_INNER, -CONCOURSE);
-  // East parapet, split around the SE landing.
-  box(boxes, CONCOURSE, RING_INNER, 0, PARAPET_Y, -CONCOURSE, STAIR_Z0);
-  box(boxes, CONCOURSE, RING_INNER, 0, PARAPET_Y, STAIR_Z1, CONCOURSE);
-  // West parapet, split around the SW landing.
-  box(boxes, -RING_INNER, -CONCOURSE, 0, PARAPET_Y, -CONCOURSE, STAIR_Z0);
-  box(boxes, -RING_INNER, -CONCOURSE, 0, PARAPET_Y, STAIR_Z1, CONCOURSE);
+  // East and west parapets stop at the landing so the stair doorway stays open
+  // up to the south parapet. The landing solid fills that doorway at catwalk height.
+  box(boxes, CONCOURSE, RING_INNER, 0, PARAPET_Y, -CONCOURSE, STAIR_LAND_Z0);
+  box(boxes, -RING_INNER, -CONCOURSE, 0, PARAPET_Y, -CONCOURSE, STAIR_LAND_Z0);
 
   for (const ramp of ATRIUM_RAMPS) {
     ramps.push({
@@ -211,11 +223,19 @@ function buildHull(): Hull {
       rise: ramp.rise,
     });
     box(boxes, ramp.minX, ramp.maxX, 0, CATWALK_Y, -RING_INNER, ramp.minZ);
-    box(boxes, ramp.minX - 0.18, ramp.minX, GROUND_Y, PARAPET_Y, ramp.minZ, ramp.maxZ);
-    box(boxes, ramp.maxX, ramp.maxX + 0.18, GROUND_Y, PARAPET_Y, ramp.minZ, ramp.maxZ);
+    // No rail on the parapet side: that crack was narrower than the capsule and
+    // pinned the NW corner at full wish speed. The well-side rail sits on the
+    // deck so the pillar beside the foot still leaves a gap the body can walk.
+    const againstParapet = ramp.minX < 0 ? "west" : "east";
+    if (againstParapet !== "west") {
+      box(boxes, ramp.minX, ramp.minX + 0.18, GROUND_Y, PARAPET_Y, ramp.minZ, ramp.maxZ);
+    }
+    if (againstParapet !== "east") {
+      box(boxes, ramp.maxX - 0.18, ramp.maxX, GROUND_Y, PARAPET_Y, ramp.minZ, ramp.maxZ);
+    }
   }
 
-  for (const stair of ATRIUM_STAIRS) stairBoxes(boxes, stair);
+  for (const stair of ATRIUM_STAIRS) boxes.push(...stairCollisionBoxes(stair));
 
   for (const pillar of ATRIUM_PILLARS) {
     box(

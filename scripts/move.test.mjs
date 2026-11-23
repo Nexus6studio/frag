@@ -503,6 +503,81 @@ test("fixed steps do not depend on how a frame is sliced", () => {
   assert.ok(Math.abs(mover.state.velocity.z - stepped.velocity.z) < 1e-9);
 });
 
+test("a turning bunny-hop chain climbs above 8 m/s and never passes the cap", () => {
+  let state = createMoveState({ x: 0, y: 0, z: 0 });
+  const run = { forward: 1, strafe: 0, jump: false, yawDeg: 0 };
+  for (let i = 0; i < 90; i += 1) state = stepMovement(state, run, SIM_DT, flat);
+  state = stepMovement(state, { ...run, jump: true }, SIM_DT, flat);
+  const theta = (30 * Math.PI) / 180;
+  let max = planarSpeedOf(state.velocity);
+  for (let i = 0; i < Math.round(5 / SIM_DT); i += 1) {
+    const travel = Math.atan2(state.velocity.x, state.velocity.z);
+    const target = travel - theta;
+    let yawDeg = (target * 180) / Math.PI - 180;
+    const wish = wishDirection(yawDeg, 1, 0);
+    const have = Math.atan2(wish.x, wish.z);
+    const err = Math.atan2(Math.sin(target - have), Math.cos(target - have));
+    yawDeg += (err * 180) / Math.PI;
+    const jump = state.grounded && state.timeOnGround <= LANDING_GRACE;
+    state = stepMovement(state, { forward: 1, strafe: 0, jump, yawDeg }, SIM_DT, flat);
+    const speed = planarSpeedOf(state.velocity);
+    if (speed > max) max = speed;
+    assert.ok(speed <= PLANAR_CAP + 1e-6, `bhop planar ${speed}`);
+  }
+  assert.ok(max > 8, `bhop chain never left 8 m/s (max ${max})`);
+  console.log(`measured bhop chain max planar m/s ${max.toFixed(3)}`);
+});
+
+test("holding W into a corner sheds planar speed and a glance keeps the tangent", () => {
+  const corner = {
+    boxes: [
+      { min: { x: -20, y: 0, z: -8 }, max: { x: 20, y: 4, z: -6 } },
+      { min: { x: -6, y: 0, z: -20 }, max: { x: -4, y: 4, z: 20 } },
+    ],
+    ramps: [],
+  };
+  let pinned = createMoveState({ x: -3.2, y: 0, z: -5.2 });
+  const into = { forward: 1, strafe: 0, jump: false, yawDeg: 45 };
+  for (let i = 0; i < Math.round(0.8 / SIM_DT); i += 1) {
+    pinned = stepMovement(pinned, into, SIM_DT, corner);
+  }
+  const cornerSpeed = planarSpeedOf(pinned.velocity);
+  assert.ok(cornerSpeed < 0.15, `corner speed ${cornerSpeed}`);
+  assert.ok(pinned.position.x > -4 + 0.2, `inside the west wall at x ${pinned.position.x}`);
+  assert.ok(pinned.position.z > -6 + 0.2, `inside the north wall at z ${pinned.position.z}`);
+  const parked = { x: pinned.position.x, z: pinned.position.z };
+  for (let i = 0; i < Math.round(0.25 / SIM_DT); i += 1) {
+    pinned = stepMovement(pinned, into, SIM_DT, corner);
+  }
+  assert.ok(Math.hypot(pinned.position.x - parked.x, pinned.position.z - parked.z) < 0.04);
+  assert.ok(planarSpeedOf(pinned.velocity) < 0.15);
+
+  const wall = {
+    boxes: [{ min: { x: -30, y: 0, z: -8 }, max: { x: 30, y: 3, z: -6 } }],
+    ramps: [],
+  };
+  const angle = (30 * Math.PI) / 180;
+  const yaw = (Math.atan2(-Math.cos(angle), Math.sin(angle)) * 180) / Math.PI;
+  let glance = {
+    position: { x: 0, y: 0, z: -6 + CAPSULE_RADIUS + 0.4 },
+    velocity: { x: 8 * Math.cos(angle), y: 0, z: -8 * Math.sin(angle) },
+    grounded: true,
+    timeOnGround: 1,
+  };
+  let kept = null;
+  for (let i = 0; i < Math.round(0.4 / SIM_DT); i += 1) {
+    glance = stepMovement(glance, { forward: 1, strafe: 0, jump: false, yawDeg: yaw }, SIM_DT, wall);
+    if (kept === null && glance.position.z <= -6 + CAPSULE_RADIUS + 0.02 && Math.abs(glance.velocity.z) < 0.35) {
+      kept = planarSpeedOf(glance.velocity);
+    }
+  }
+  assert.ok(kept !== null, "glance never met the wall");
+  assert.ok(Math.abs(kept - 8 * Math.cos(angle)) <= 0.35, `tangent ${kept}`);
+  console.log(
+    `measured corner speed m/s ${cornerSpeed.toFixed(3)} glance tangent ${kept.toFixed(3)}`,
+  );
+});
+
 test("move debug hook is read-only and gated on import.meta.env.DEV", () => {
   const host = {};
   let state = createMoveState({ x: 1, y: 0, z: 2 });

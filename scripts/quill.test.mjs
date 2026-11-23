@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAtriumHull } from "../src/atrium.ts";
+import { ATRIUM_STAIRS, GROUND_Y, STAIR_MOUTH_Z, STAIR_RISE, createAtriumHull } from "../src/atrium.ts";
 import { createHitboxWorld, registerHitbox } from "../src/hitbox.ts";
 import { hudReadout } from "../src/hud/model.ts";
 import { createPlayerState } from "../src/player/state.ts";
@@ -304,6 +304,40 @@ test("flechettes stop on hulls and do not pass through a dummy", () => {
   assert.equal(through, 0);
   assert.ok(hall.slots[0].z < -5, `did not travel, z ${hall.slots[0].z}`);
   assert.ok(hall.slots[0].z > -11.25, `passed the atrium hull, z ${hall.slots[0].z}`);
+});
+
+test("flechettes die on the re-laid stair hulls", () => {
+  const hull = createAtriumHull();
+  const south = { x: 0, y: 0, z: 1 };
+  for (const stair of ATRIUM_STAIRS) {
+    const x0 = Math.min(stair.x0, stair.x1);
+    const x1 = Math.max(stair.x0, stair.x1);
+    const x = (x0 + x1) / 2;
+    // Above the concourse slab and inside the first riser, so the near face is the hit.
+    const y = GROUND_Y + STAIR_RISE * 0.5;
+    const origin = { x, y, z: STAIR_MOUTH_Z - 1 };
+    const world = createHitboxWorld();
+    let leaked = 0;
+    world.register({
+      center: { x, y, z: STAIR_MOUTH_Z + 2 },
+      radius: 0.2,
+      onHit() {
+        leaked += 1;
+      },
+    });
+    const quill = createQuill({ hull, hitboxes: world });
+    quill.update(0, { fire: true, reload: false, origin, direction: south });
+    // 0.25 s is 17.5 m, enough to tunnel a tread if the step is not swept.
+    quill.update(0.25, { fire: false, reload: false, origin, direction: south });
+    const stopped = quill.slots[0];
+    assert.equal(leaked, 0, `${stair.id} flechette passed the flight`);
+    assert.equal(quill.liveCount, 0, `${stair.id} flechette stayed alive`);
+    assert.ok(
+      Math.abs(stopped.z - STAIR_MOUTH_Z) < 0.02,
+      `${stair.id} stopped at z ${stopped.z}, expected the mouth face ${STAIR_MOUTH_Z}`,
+    );
+    assert.ok(stopped.x > x0 - 0.05 && stopped.x < x1 + 0.05, `${stair.id} left the flight at x ${stopped.x}`);
+  }
 });
 
 test("an aabb hitbox takes the same 9 damage", () => {
