@@ -559,3 +559,236 @@ test("the drawn atrium stays inside the triangle and mesh budget", async () => {
   assert.ok(view.meshes.length > 0 && view.meshes.length <= 16, `meshes ${view.meshes.length}`);
   console.log(`atrium meshes ${view.meshes.length} triangles ${view.triangles}`);
 });
+
+test("the procedural panel tiles, stays dark, and wraps at the seam", async () => {
+  const { PANEL_SIZE, panelPixel, paintPanel } = await import("../src/panel.ts");
+  assert.deepEqual(panelPixel(0, 4), panelPixel(PANEL_SIZE, 4));
+  assert.deepEqual(panelPixel(3, PANEL_SIZE - 1), panelPixel(3 + PANEL_SIZE, -1));
+  assert.deepEqual(panelPixel(-1, 20), panelPixel(PANEL_SIZE - 1, 20));
+  const seam = panelPixel(1, 40);
+  const field = panelPixel(48, 40);
+  const edge = panelPixel(PANEL_SIZE - 1, 40);
+  assert.ok(field[0] > seam[0] + 6, `panel field ${field[0]} is not lighter than the seam ${seam[0]}`);
+  assert.ok(Math.abs(seam[0] - edge[0]) < 8, `seam column broke across the tile (${seam[0]} vs ${edge[0]})`);
+  let min = 255;
+  let max = 0;
+  for (let y = 0; y < PANEL_SIZE; y += 8) {
+    for (let x = 0; x < PANEL_SIZE; x += 8) {
+      const [r, g, b] = panelPixel(x, y);
+      assert.ok(r < 72 && g < 72 && b < 80, `bright panel texel ${r},${g},${b} at ${x},${y}`);
+      min = Math.min(min, r, g, b);
+      max = Math.max(max, r, g, b);
+    }
+  }
+  assert.ok(max - min >= 12, `panel texture is flat (${min}..${max})`);
+  const painted = paintPanel();
+  assert.equal(painted.length, PANEL_SIZE * PANEL_SIZE * 4);
+  const [r, g, b] = panelPixel(0, 17);
+  assert.equal(painted[17 * PANEL_SIZE * 4], r);
+  assert.equal(painted[17 * PANEL_SIZE * 4 + 1], g);
+  assert.equal(painted[17 * PANEL_SIZE * 4 + 2], b);
+  assert.equal(painted[17 * PANEL_SIZE * 4 + 3], 255);
+});
+
+function sub3(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function dot3(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function add3(a, b) {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+function scale3(a, s) {
+  return [a[0] * s, a[1] * s, a[2] * s];
+}
+
+function len3(a) {
+  return Math.hypot(a[0], a[1], a[2]);
+}
+
+/** Distance from a point to a triangle. Used to prove trim sits on a transition. */
+function distPointTriangle(p, a, b, c) {
+  const ab = sub3(b, a);
+  const ac = sub3(c, a);
+  const ap = sub3(p, a);
+  const d1 = dot3(ab, ap);
+  const d2 = dot3(ac, ap);
+  if (d1 <= 0 && d2 <= 0) return len3(ap);
+  const bp = sub3(p, b);
+  const d3 = dot3(ab, bp);
+  const d4 = dot3(ac, bp);
+  if (d3 >= 0 && d4 <= d3) return len3(bp);
+  const cp = sub3(p, c);
+  const d5 = dot3(ab, cp);
+  const d6 = dot3(ac, cp);
+  if (d6 >= 0 && d5 <= d6) return len3(cp);
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 / (d1 - d3);
+    return len3(sub3(p, add3(a, scale3(ab, v))));
+  }
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 / (d2 - d6);
+    return len3(sub3(p, add3(a, scale3(ac, w))));
+  }
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+    const w = (d4 - d3) / (d4 - d3 + (d5 - d6));
+    return len3(sub3(p, add3(b, scale3(sub3(c, b), w))));
+  }
+  const denom = 1 / (va + vb + vc);
+  const v = vb * denom;
+  const w = vc * denom;
+  return len3(sub3(p, add3(a, add3(scale3(ab, v), scale3(ac, w)))));
+}
+
+function distToMesh(mesh, x, y, z) {
+  const pos = mesh.geometry.getAttribute("position");
+  const p = [x, y, z];
+  let best = Infinity;
+  for (let i = 0; i < pos.count; i += 3) {
+    const a = [pos.getX(i), pos.getY(i), pos.getZ(i)];
+    const b = [pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)];
+    const c = [pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2)];
+    const dist = distPointTriangle(p, a, b, c);
+    if (dist < best) best = dist;
+  }
+  return best;
+}
+
+function longestUvPerMeter(mesh, pred) {
+  const pos = mesh.geometry.getAttribute("position");
+  const uv = mesh.geometry.getAttribute("uv");
+  let best = null;
+  for (let i = 0; i < pos.count; i += 3) {
+    for (const [a, b] of [
+      [0, 1],
+      [1, 2],
+      [2, 0],
+    ]) {
+      const ia = i + a;
+      const ib = i + b;
+      const ax = pos.getX(ia);
+      const ay = pos.getY(ia);
+      const az = pos.getZ(ia);
+      const bx = pos.getX(ib);
+      const by = pos.getY(ib);
+      const bz = pos.getZ(ib);
+      if (!pred(ax, ay, az) || !pred(bx, by, bz)) continue;
+      const world = Math.hypot(ax - bx, ay - by, az - bz);
+      if (world < 0.4) continue;
+      const span = Math.hypot(uv.getX(ia) - uv.getX(ib), uv.getY(ia) - uv.getY(ib));
+      if (!best || world > best.world) best = { world, ratio: span / world };
+    }
+  }
+  return best;
+}
+
+test("wall, ramp, and pillar panels share one tiled texture and trim stays in budget", async () => {
+  const { PANEL_METERS, PANEL_SIZE } = await import("../src/panel.ts");
+  const { RepeatWrapping } = await import("three");
+  const { CATWALK_Y, GROUND_Y } = await import("../src/atrium.ts");
+  const { buildAtriumView } = await import("../src/floor.ts");
+  const view = buildAtriumView();
+  const shell = view.meshes.find((mesh) => mesh.name === "atrium-shell");
+  const ramp = view.meshes.find((mesh) => mesh.name === "atrium-ramp");
+  const floor = view.meshes.find((mesh) => mesh.name === "atrium-floor");
+  const trim = view.meshes.find((mesh) => mesh.name === "atrium-trim");
+  assert.ok(shell && ramp && floor && trim, "floor, shell, ramp, and trim meshes missing");
+  assert.equal(shell.material, ramp.material, "ramp built its own panel material");
+  assert.ok(shell.material.emissiveMap, "panel texture was not assigned");
+  assert.equal(shell.material.emissiveMap, ramp.material.emissiveMap);
+  assert.equal(floor.material.emissiveMap, null);
+  assert.equal(trim.material.emissiveMap, null);
+
+  const maps = new Set();
+  for (const mesh of view.meshes) {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      if (material.emissiveMap) maps.add(material.emissiveMap);
+    }
+  }
+  assert.equal(maps.size, 1, `panel texture duplicated ${maps.size} times`);
+  const texture = shell.material.emissiveMap;
+  assert.equal(texture.wrapS, RepeatWrapping);
+  assert.equal(texture.wrapT, RepeatWrapping);
+  assert.equal(texture.image.width, PANEL_SIZE);
+  assert.equal(texture.image.height, PANEL_SIZE);
+  assert.equal(texture.name, "atrium-panel");
+
+  const shellPos = shell.geometry.getAttribute("position");
+  let pillar = false;
+  for (let i = 0; i < shellPos.count; i += 1) {
+    if (Math.abs(shellPos.getX(i) - 6.75) < 0.02 && Math.abs(shellPos.getZ(i) - 6.75) < 0.02) pillar = true;
+  }
+  assert.equal(pillar, true, "pillar was not drawn with the shared shell texture");
+
+  const wall = longestUvPerMeter(
+    shell,
+    (_x, y, z) => Math.abs(z - 16) < 0.02 && y < 0.05,
+  );
+  const pillarEdge = longestUvPerMeter(
+    shell,
+    (x, _y, z) => Math.abs(x - 6.75) < 0.02 && Math.abs(z - 6.75) < 0.02,
+  );
+  const slope = longestUvPerMeter(ramp, (x, y) => Math.abs(x - 7.6) < 0.02 && y > 0.5);
+  assert.ok(wall && pillarEdge && slope, `missing uv edges wall ${!!wall} pillar ${!!pillarEdge} slope ${!!slope}`);
+  const tile = 1 / PANEL_METERS;
+  assert.ok(Math.abs(wall.ratio - tile) < 0.02, `wall uv/m ${wall.ratio} over ${wall.world.toFixed(2)} m`);
+  assert.ok(Math.abs(pillarEdge.ratio - wall.ratio) < 0.02, `pillar uv/m ${pillarEdge.ratio} vs wall ${wall.ratio}`);
+  assert.ok(Math.abs(slope.ratio - tile) < 0.02, `ramp uv/m ${slope.ratio} (squashed slope)`);
+  assert.ok(wall.world > 20, `wide wall was split into ${wall.world.toFixed(2)} m`);
+  assert.ok(pillarEdge.world < 5, `pillar edge is ${pillarEdge.world.toFixed(2)} m`);
+
+  const trimLum = 0.2126 * trim.material.emissive.r + 0.7152 * trim.material.emissive.g + 0.0722 * trim.material.emissive.b;
+  const floorLum = 0.2126 * floor.material.emissive.r + 0.7152 * floor.material.emissive.g + 0.0722 * floor.material.emissive.b;
+  assert.ok(trimLum > floorLum * 4, `trim luminance ${trimLum} does not separate from the floor ${floorLum}`);
+  assert.ok(trimLum < 0.2, `trim luminance ${trimLum} competes with the neon accents`);
+  const spread = Math.max(trim.material.emissive.r, trim.material.emissive.g, trim.material.emissive.b) - Math.min(trim.material.emissive.r, trim.material.emissive.g, trim.material.emissive.b);
+  assert.ok(spread < 0.16, `trim is saturated (${spread})`);
+
+  const probes = [
+    ["well south riser", 0, 0.4, 4.978],
+    ["well north riser", 0, 0.4, -4.978],
+    ["well east riser", 4.978, 0.4, 0],
+    ["well west riser", -4.978, 0.4, 0],
+    ["well south nosing", 0, GROUND_Y + 0.028, 5.03],
+    ["ne ramp base", 8.9, GROUND_Y + 0.045, -6.153],
+    ["nw ramp base", -8.9, GROUND_Y + 0.045, -6.153],
+    ["ne ramp edge", 10.159, 3.079, -8.573],
+    ["nw ramp edge", -10.159, 3.079, -8.573],
+    ["ne landing", 8.9, CATWALK_Y + 0.042, -11.04],
+    ["nw landing", -8.9, CATWALK_Y + 0.042, -11.04],
+    ["ne soffit", 10.159, 3.01, -8.638],
+    ["se stair riser", 9.885, 0.95, 2.38],
+    ["sw stair riser", -9.885, 0.95, 2.38],
+    ["se stringer", 8.7165, 3.05, 6.15],
+    ["sw stringer", -8.7165, 3.05, 6.15],
+    ["se landing", 9.885, CATWALK_Y + 0.02, 9.94],
+    ["sw landing", -9.885, CATWALK_Y + 0.02, 9.94],
+    ["pillar plinth", 6.79, GROUND_Y + 0.05, 6.05],
+    ["catwalk baseboard", 0, CATWALK_Y + 0.18, 15.97],
+    ["parapet baseboard", 0, GROUND_Y + 0.16, 10.97],
+    ["south soffit", 0, 5.272, 10.978],
+    ["north soffit", 0, 5.272, -10.978],
+  ];
+  const misses = [];
+  for (const [id, x, y, z] of probes) {
+    const dist = distToMesh(trim, x, y, z);
+    if (dist > 0.08) misses.push(`${id} dist ${dist.toFixed(3)} at ${x},${y},${z}`);
+  }
+  assert.equal(misses.length, 0, misses.join("\n"));
+
+  const trimTris = trim.geometry.getAttribute("position").count / 3;
+  assert.ok(trimTris > 40 && trimTris < 2_000, `trim triangles ${trimTris}`);
+  assert.ok(view.triangles <= 50_000, `triangles ${view.triangles}`);
+  assert.ok(view.meshes.length <= 16, `meshes ${view.meshes.length}`);
+  console.log(
+    `panel shared across shell+ramp, trim tris ${trimTris}, atrium meshes ${view.meshes.length}, triangles ${view.triangles}`,
+  );
+});
