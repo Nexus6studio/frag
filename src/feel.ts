@@ -119,6 +119,14 @@ export function damageBearing(yawDeg: number, eye: Vec3, source: Vec3): number {
   return wrapPi(Math.atan2(right, forward));
 }
 
+/** A HUD box in viewport fractions. Origin is the top left. */
+export interface ScreenRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 /**
  * Outer peak of the damage crescent, in viewport fractions.
  * The peak sits on the screen rectangle in the attacker's direction.
@@ -128,16 +136,79 @@ export function arcAnchor(bearing: number): { x: number; y: number; rotation: nu
   const angle = wrapPi(bearing);
   const dx = Math.sin(angle);
   const dy = -Math.cos(angle);
-  const ax = Math.abs(dx);
-  const ay = Math.abs(dy);
-  const tx = ax > 1e-8 ? 0.5 / ax : Number.POSITIVE_INFINITY;
-  const ty = ay > 1e-8 ? 0.5 / ay : Number.POSITIVE_INFINITY;
-  const t = Math.min(tx, ty);
+  const t = rayToEdge(dx, dy);
   return {
     x: clamp(0.5 + dx * t, 0, 1),
     y: clamp(0.5 + dy * t, 0, 1),
     rotation: angle,
   };
+}
+
+/**
+ * Pull an edge peak back along its bearing until it is clear of HUD boxes.
+ * The peak stops on the inner side of the first box the ray enters, so a rear
+ * crescent sits on top of the bottom bar instead of running through it.
+ * Boxes are viewport fractions. An empty list leaves the peak on the screen edge.
+ */
+export function seatArcPeak(
+  anchor: { x: number; y: number; rotation: number },
+  obstacles: readonly ScreenRect[],
+): { x: number; y: number; rotation: number } {
+  const dx = Math.sin(anchor.rotation);
+  const dy = -Math.cos(anchor.rotation);
+  let t = rayToEdge(dx, dy);
+  for (let i = 0; i < obstacles.length; i += 1) {
+    const enter = rayEnters(dx, dy, obstacles[i]!);
+    if (enter !== null && enter < t) t = enter;
+  }
+  return {
+    x: clamp(0.5 + dx * t, 0, 1),
+    y: clamp(0.5 + dy * t, 0, 1),
+    rotation: anchor.rotation,
+  };
+}
+
+function rayToEdge(dx: number, dy: number): number {
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  const tx = ax > 1e-8 ? 0.5 / ax : Number.POSITIVE_INFINITY;
+  const ty = ay > 1e-8 ? 0.5 / ay : Number.POSITIVE_INFINITY;
+  return Math.min(tx, ty);
+}
+
+/** Distance from the viewport center to where the bearing ray enters a box. */
+function rayEnters(dx: number, dy: number, box: ScreenRect): number | null {
+  if (!(box.right > box.left) || !(box.bottom > box.top)) return null;
+  let tMin = 0;
+  let tMax = Number.POSITIVE_INFINITY;
+  const originX = 0.5;
+  const originY = 0.5;
+  const slabs = [
+    [originX, dx, box.left, box.right],
+    [originY, dy, box.top, box.bottom],
+  ] as const;
+  for (let i = 0; i < slabs.length; i += 1) {
+    const origin = slabs[i][0];
+    const dir = slabs[i][1];
+    const min = slabs[i][2];
+    const max = slabs[i][3];
+    if (Math.abs(dir) <= 1e-8) {
+      if (origin < min || origin > max) return null;
+      continue;
+    }
+    let t1 = (min - origin) / dir;
+    let t2 = (max - origin) / dir;
+    if (t1 > t2) {
+      const swap = t1;
+      t1 = t2;
+      t2 = swap;
+    }
+    if (t1 > tMin) tMin = t1;
+    if (t2 < tMax) tMax = t2;
+    if (tMin > tMax) return null;
+  }
+  if (!(tMin > 1e-6) || !Number.isFinite(tMin)) return null;
+  return tMin;
 }
 
 export function arcOpacity(age: number): number {

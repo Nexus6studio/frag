@@ -1,5 +1,5 @@
 import "./hud.css";
-import { ARC_CAP, type FeedbackSample } from "../feel.ts";
+import { ARC_CAP, seatArcPeak, type FeedbackSample, type ScreenRect } from "../feel.ts";
 import type { PlayerStore } from "../player/state";
 import type { DeathRecap } from "../waves.ts";
 import { acceptRestartClick, bindHud, deathRecapText, recapAcceptsInput, recapEnterAction, type HudElements } from "./model";
@@ -206,6 +206,7 @@ export function mountHud(
       marker.dataset.kind = flash.kind;
       marker.hidden = flash.kind === "none";
       marker.style.opacity = flash.opacity.toFixed(3);
+      let obstacles: ScreenRect[] | null = null;
       for (let i = 0; i < arcEls.length; i += 1) {
         const el = arcEls[i]!;
         const arc = sample.arcs[i];
@@ -213,15 +214,37 @@ export function mountHud(
           el.hidden = true;
           continue;
         }
+        if (!obstacles) obstacles = hudEdgeObstacles([bar, waveEl, mute]);
+        const seated = seatArcPeak(arc, obstacles);
         el.hidden = false;
-        el.style.left = `${(arc.x * 100).toFixed(2)}%`;
-        el.style.top = `${(arc.y * 100).toFixed(2)}%`;
+        el.style.left = `${(seated.x * 100).toFixed(2)}%`;
+        el.style.top = `${(seated.y * 100).toFixed(2)}%`;
         el.style.opacity = arc.opacity.toFixed(3);
-        // arc.x/y is the outer peak. translate(-50%, 0) plus center-top origin parks that peak on the edge.
-        el.style.transform = `translate(-50%, 0) rotate(${arc.rotation.toFixed(4)}rad)`;
+        // seated x/y is the outer peak. translate(-50%, 0) plus center-top origin parks that peak on the edge.
+        el.style.transform = `translate(-50%, 0) rotate(${seated.rotation.toFixed(4)}rad)`;
       }
     },
   };
+}
+
+/** Live HUD boxes that sit on a screen edge, in viewport fractions. Hidden chrome is skipped. */
+function hudEdgeObstacles(elements: readonly HTMLElement[]): ScreenRect[] {
+  const width = Math.max(1, window.innerWidth);
+  const height = Math.max(1, window.innerHeight);
+  const rects: ScreenRect[] = [];
+  for (let i = 0; i < elements.length; i += 1) {
+    const el = elements[i]!;
+    if (el.hidden) continue;
+    const box = el.getBoundingClientRect();
+    if (!(box.width > 0) || !(box.height > 0)) continue;
+    rects.push({
+      left: box.left / width,
+      top: box.top / height,
+      right: box.right / width,
+      bottom: box.bottom / height,
+    });
+  }
+  return rects;
 }
 
 function stat(

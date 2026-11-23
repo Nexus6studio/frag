@@ -11,6 +11,7 @@ import {
   VIEW_REST,
   arcAnchor,
   arcOpacity,
+  seatArcPeak,
   createCombatFeedback,
   damageBearing,
   freshMarker,
@@ -35,6 +36,71 @@ const eye = { x: 0, y: 1.45, z: 0 };
 /** Distance from a viewport-fraction point to the nearest screen edge. 0 means on the edge. */
 function edgeGap(point) {
   return Math.min(point.x, point.y, 1 - point.x, 1 - point.y);
+}
+
+const hudCss = fs.readFileSync(new URL("../src/hud/hud.css", import.meta.url), "utf8");
+
+function cssBlock(selector) {
+  const source = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = hudCss.match(new RegExp(`(?:^|\\n)${source}\\s*\\{([^}]+)\\}`));
+  assert.ok(match, `${selector} rule missing`);
+  return match[1];
+}
+
+function cssPx(block, prop) {
+  const match = block.match(new RegExp(`${prop}:\\s*(\\d+(?:\\.\\d+)?)px`));
+  assert.ok(match, `${prop} missing`);
+  return Number(match[1]);
+}
+
+function lineBox(block) {
+  const size = cssPx(block, "font-size");
+  const line = block.match(/line-height:\s*(\d+(?:\.\d+)?)/);
+  return size * (line ? Number(line[1]) : 1);
+}
+
+/** Laid-out #hud-bar from the stylesheet. Height comes from the stat metrics, not a fixed inset. */
+function hudBarPixels(view) {
+  const bar = cssBlock("#hud-bar");
+  const stat = cssBlock(".hud-stat");
+  const label = cssBlock(".hud-label");
+  const value = cssBlock(".hud-value");
+  const padding = stat.match(/padding:\s*(\d+(?:\.\d+)?)px\s+(\d+(?:\.\d+)?)px\s+(\d+(?:\.\d+)?)px/);
+  assert.ok(padding, "hud-stat padding missing");
+  const height = Number(padding[1]) + lineBox(label) + cssPx(label, "margin-bottom") + lineBox(value) + Number(padding[3]);
+  const bottom = cssPx(bar, "bottom");
+  return {
+    left: cssPx(bar, "left"),
+    right: view.width - cssPx(bar, "right"),
+    top: view.height - bottom - height,
+    bottom: view.height - bottom,
+  };
+}
+
+/** Laid-out #hud-wave from the stylesheet. "WAVE 1" is the live label. */
+function hudWavePixels(view) {
+  const wave = cssBlock("#hud-wave");
+  const padding = wave.match(/padding:\s*(\d+(?:\.\d+)?)px\s+(\d+(?:\.\d+)?)px/);
+  assert.ok(padding, "hud-wave padding missing");
+  const height = Number(padding[1]) * 2 + lineBox(wave);
+  const text = "WAVE 1";
+  const width = text.length * lineBox(wave) * 0.62 + Number(padding[2]) * 2;
+  const top = cssPx(wave, "top");
+  return {
+    left: (view.width - width) / 2,
+    right: (view.width + width) / 2,
+    top,
+    bottom: top + height,
+  };
+}
+
+function toFractions(rect, view) {
+  return {
+    left: rect.left / view.width,
+    top: rect.top / view.height,
+    right: rect.right / view.width,
+    bottom: rect.bottom / view.height,
+  };
 }
 
 test("a hit marker lasts 80 ms and a kill is a larger flash that a hit cannot downgrade", () => {
@@ -140,6 +206,30 @@ test("the damage crescent is at least three times the old 4px stroke and hangs i
   const hud = fs.readFileSync(new URL("../src/hud/hud.ts", import.meta.url), "utf8");
   assert.match(hud, /translate\(-50%, 0\) rotate/, "arc is still centered on the anchor instead of hanging inward from the edge");
   assert.doesNotMatch(hud, /translate\(-50%, -50%\)/, "arc element is centered, so the ring floats inside the edge");
+});
+
+test("a rear arc peak sits on the HUD bar and does not overlap it", () => {
+  const view = { width: 1280, height: 720 };
+  const bar = hudBarPixels(view);
+  const obstacles = [toFractions(bar, view)];
+  const peak = seatArcPeak(arcAnchor(Math.PI), obstacles);
+  const x = peak.x * view.width;
+  const y = peak.y * view.height;
+  const overlaps = x > bar.left && x < bar.right && y > bar.top && y < bar.bottom;
+  assert.equal(overlaps, false, `rear peak ${x.toFixed(2)},${y.toFixed(2)} overlaps the bar`);
+  assert.ok(Math.abs(y - bar.top) <= 0.75, `rear peak y ${y.toFixed(2)} is not on the bar top ${bar.top}`);
+  assert.ok(Math.abs(x - view.width / 2) < 2, `rear peak x ${x.toFixed(2)} left the center`);
+
+  const side = seatArcPeak(arcAnchor(Math.PI / 2), obstacles);
+  assert.ok(side.x > 0.98, `the bar pulled a side peak off the edge (${side.x})`);
+
+  const wave = hudWavePixels(view);
+  const ahead = seatArcPeak(arcAnchor(0), [toFractions(wave, view)]);
+  const aheadY = ahead.y * view.height;
+  const aheadX = ahead.x * view.width;
+  const waveOverlap = aheadX > wave.left && aheadX < wave.right && aheadY > wave.top && aheadY < wave.bottom;
+  assert.equal(waveOverlap, false, `forward peak ${aheadX.toFixed(2)},${aheadY.toFixed(2)} overlaps the wave label`);
+  assert.ok(Math.abs(aheadY - wave.bottom) <= 0.75, `forward peak y ${aheadY.toFixed(2)} left the wave label`);
 });
 
 test("three stacked arcs stay on the opacity cap without raising it", () => {
