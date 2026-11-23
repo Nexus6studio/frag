@@ -19,6 +19,7 @@
 // in 0.10 s, before the next pulse, and it does not bend the bore line.
 
 import { CEILING_Y, KILL_Y, MAP_HALF } from "./atrium.ts";
+import type { CueListener } from "./cues.ts";
 import { playerHitboxes, type HitboxSweep, type HitboxWorld } from "./hitbox.ts";
 import type { Hull, Vec3 } from "./move.ts";
 import type { PlayerStore } from "./player/state.ts";
@@ -80,6 +81,8 @@ export interface QuillOptions {
   /** Defaults to the shared enemy list. */
   hitboxes?: HitboxWorld;
   poolCap?: number;
+  /** Shot, dry click, and reload. Omitted in tests that only check the gun. */
+  onEvent?: CueListener;
 }
 
 export interface QuillDriver {
@@ -213,6 +216,7 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     punchAge = 0;
     flash = 1;
     if (mag <= 0 && reserve > 0) tryStartReload();
+    options.onEvent?.({ type: "quill-shot" });
     return true;
   }
 
@@ -220,6 +224,7 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     if (reloading || mag >= QUILL_MAG || reserve <= 0) return;
     reloading = true;
     reloadTimer = 0;
+    options.onEvent?.({ type: "reload-start" });
   }
 
   function finishReload(): void {
@@ -233,6 +238,16 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     if (reserve < 0) reserve = 0;
     if (reserve > QUILL_RESERVE_CAP) reserve = QUILL_RESERVE_CAP;
     if (mag > QUILL_MAG) mag = QUILL_MAG;
+    options.onEvent?.({ type: "reload-end" });
+  }
+
+  function noteDry(command: QuillCommand): void {
+    if (reserve > 0) return;
+    const rawPresses = command.presses;
+    const paced = typeof rawPresses === "number";
+    const presses = paced ? Math.max(0, Math.floor(rawPresses)) : 0;
+    const pulls = Math.min(8, paced ? presses : command.fire && !triggerHeld ? 1 : 0);
+    for (let i = 0; i < pulls; i += 1) options.onEvent?.({ type: "quill-dry" });
   }
 
   function advance(dt: number): void {
@@ -293,6 +308,7 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
       }
 
       if (mag <= 0) {
+        noteDry(command);
         settle(dt);
         carry = QUILL_INTERVAL;
         triggerHeld = command.fire;

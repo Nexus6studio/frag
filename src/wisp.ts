@@ -17,6 +17,7 @@
 // Those particles, and the bolts, are fixed pools.
 
 import { CEILING_Y, KILL_Y, MAP_HALF, PARAPET_Y } from "./atrium.ts";
+import type { CueListener } from "./cues.ts";
 import type { HitboxHandle, HitboxWorld } from "./hitbox.ts";
 import { playerHitboxes } from "./hitbox.ts";
 import { CAPSULE_HEIGHT, CAPSULE_RADIUS, EYE_HEIGHT, type BoxSolid, type Hull, type RampSolid, type Vec3 } from "./move.ts";
@@ -180,6 +181,8 @@ export interface WispOptions {
   alliesAlive?: () => number;
   /** Fires when a wave's drones are placed, including the opening spawn. */
   onWaveSpawn?: (plan: WavePlan, feet: Vec3) => void;
+  /** Shots, hits, and kills. The view plays these. The sim does not. */
+  onEvent?: CueListener;
 }
 
 interface Drone extends WispDrone {
@@ -376,6 +379,7 @@ export function createWispSim(options: WispOptions): WispSim {
     slot.serial = birth + 1;
     birth += 1;
     if (at < firstBolt) firstBolt = at;
+    options.onEvent?.({ type: "wisp-shot" });
   }
 
   function takeBolt(): WispBolt | null {
@@ -818,11 +822,15 @@ export function createWispSim(options: WispOptions): WispSim {
   function applyFlechette(drone: Drone, amount: number): void {
     if (!drone.alive || !Number.isFinite(amount) || amount <= 0) return;
     drone.hp -= amount;
-    if (drone.hp > 0) return;
+    if (drone.hp > 0) {
+      options.onEvent?.({ type: "enemy-hit" });
+      return;
+    }
     drone.hp = 0;
     drone.alive = false;
     drone.handle.setActive(false);
     emitDeath(drone.position);
+    options.onEvent?.({ type: "enemy-kill" });
     director.noteFrag();
     if (countAlive() === 0) battlefieldClear();
   }

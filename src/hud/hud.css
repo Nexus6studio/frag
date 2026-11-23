@@ -128,6 +128,24 @@ html[data-cursor="none"] canvas {
   margin-left: auto;
 }
 
+#hud-mute {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  margin: 0;
+  padding: 4px 8px;
+  background: #14151c;
+  color: #f7f8ff;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+}
+
+#hud-mute[hidden] {
+  display: none;
+}
+
 #hud-wave {
   position: absolute;
   top: 16px;

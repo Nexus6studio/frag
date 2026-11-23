@@ -76,15 +76,17 @@ async function previewExited() {
 
 const errors = [];
 
-// Chrome's OpenGL backend prints this four times while compositing WebGL, then
-// adds "(this message will no longer repeat)". The page never calls readPixels.
-const warningAllowlist = [
-  {
-    pattern: /GPU stall due to ReadPixels/,
-    reason:
-      "Chrome/ANGLE logs a driver stall four times on load when its OpenGL backend copies the WebGL canvas to the screen. Frag does not read pixels there, and page script cannot silence the driver notice.",
-  },
-];
+function noteConsole(page, errors, label) {
+  const prefix = label ? `${label} ` : "";
+  page.on("console", (message) => {
+    const text = message.text();
+    if (message.type() === "error") errors.push(`${prefix}console: ${text}`);
+    if (message.type() === "warning") errors.push(`${prefix}console warning: ${text}`);
+  });
+  page.on("pageerror", (error) => {
+    errors.push(`${prefix}pageerror: ${error.message}`);
+  });
+}
 
 function phaseOf(page) {
   return page.locator("#app-shell").getAttribute("data-phase");
@@ -724,9 +726,15 @@ async function assertQuillFire(page, errors) {
       await refilled(mid);
     } catch (retryError) {
       const message = retryError instanceof Error ? retryError.message.split("\n")[0] : String(retryError);
-      const text = await page.evaluate(() => document.querySelector("#hud-ammo")?.textContent ?? "");
-      const phase = await page.evaluate(() => document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "");
-      errors.push(`reload did not refill the magazine (now ${text}, phase ${phase}): ${message}`);
+      const snap = await page.evaluate(() => ({
+        text: document.querySelector("#hud-ammo")?.textContent ?? "",
+        phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+        hp: document.querySelector("#hud-hp")?.textContent ?? "",
+        mode: document.querySelector("#hud")?.getAttribute("data-mode") ?? "",
+      }));
+      errors.push(
+        `reload did not refill the magazine (now ${snap.text}, hp ${snap.hp}, hud ${snap.mode}, phase ${snap.phase}): ${message}`,
+      );
     }
   }
   const drones = await readDrones(page);
@@ -903,6 +911,11 @@ async function assertShellFlow(page, errors) {
     }
   }
 
+  // Fire and reload while spawn grace still holds. The weapon sim stops at
+  // 0 HP, and the shell stays in "playing", so a later R cannot refill a
+  // magazine the fight has already frozen.
+  await assertQuillFire(page, errors);
+
   const recapHit = await page.evaluate(() => {
     const death = document.querySelector("#death-recap");
     const style = death instanceof HTMLElement ? getComputedStyle(death) : null;
@@ -1015,7 +1028,33 @@ async function assertShellFlow(page, errors) {
     }
   }
 
-  await assertQuillFire(page, errors);
+  await page.keyboard.press("KeyM");
+  const muted = await page.locator("#hud-mute").evaluate((el) => ({
+    hidden: el.hidden,
+    text: (el.textContent ?? "").trim(),
+  }));
+  if (muted.hidden || muted.text !== "MUTE") {
+    errors.push(`M did not show the mute indicator (${JSON.stringify(muted)})`);
+  }
+  await page.keyboard.press("KeyM");
+  if (!(await page.locator("#hud-mute").evaluate((el) => el.hidden))) {
+    errors.push("M did not clear the mute indicator");
+  }
+  try {
+    await page.waitForFunction(
+      () => {
+        const hp = Number(document.querySelector("#hud-hp")?.textContent ?? "");
+        const dead = document.querySelector("#hud")?.getAttribute("data-mode") === "dead";
+        return dead || (Number.isFinite(hp) && hp < 100);
+      },
+      undefined,
+      { timeout: 12_000, polling: 100 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    const hp = await page.locator("#hud-hp").innerText();
+    errors.push(`play did not take damage (hp ${hp.trim()}): ${message}`);
+  }
 
   await page.keyboard.press("F1");
   if (await page.locator("#fps-readout").evaluate((el) => !el.hidden)) {
@@ -1109,17 +1148,7 @@ async function runDevSmoke(browser, errors) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   if (process.env.FRAG_SLOW_FRAMES === "1") await installSlowFrames(page);
   try {
-    page.on("console", (message) => {
-      const text = message.text();
-      if (message.type() === "error") errors.push(`dev console: ${text}`);
-      if (message.type() === "warning") {
-        const allowed = warningAllowlist.find((entry) => entry.pattern.test(text));
-        if (!allowed) errors.push(`dev console warning: ${text}`);
-      }
-    });
-    page.on("pageerror", (error) => {
-      errors.push(`dev pageerror: ${error.message}`);
-    });
+    noteConsole(page, errors, "dev");
     page.on("request", (request) => {
       const url = request.url();
       if (url.startsWith(`${devOrigin}/`) || url === devOrigin || url.startsWith("data:")) return;
@@ -1681,12 +1710,7 @@ async function assertSimAdvances(page, errors, label) {
 
 async function assertPauseResume(browser, errors) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-  page.on("pageerror", (error) => {
-    errors.push(`pause resume pageerror: ${error.message}`);
-  });
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`pause resume console: ${message.text()}`);
-  });
+  noteConsole(page, errors, "pause resume");
   try {
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
     await page.waitForSelector("canvas", { timeout: 30_000 });
@@ -1772,12 +1796,7 @@ async function assertPauseResume(browser, errors) {
 
 async function assertStationaryDamage(browser, errors) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  page.on("pageerror", (error) => {
-    errors.push(`damage probe pageerror: ${error.message}`);
-  });
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`damage probe console: ${message.text()}`);
-  });
+  noteConsole(page, errors, "damage probe");
   try {
     await page.addInitScript(() => {
       window.__fragBenchHp = 500;
@@ -1875,9 +1894,7 @@ async function assertStationaryDamage(browser, errors) {
 
 async function assertThrottledFire(browser, errors) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-  page.on("pageerror", (error) => {
-    errors.push(`fire probe pageerror: ${error.message}`);
-  });
+  noteConsole(page, errors, "fire probe");
   try {
     await page.addInitScript(() => {
       window.__fragBenchHp = 500;
@@ -2030,53 +2047,24 @@ async function assertThrottledFire(browser, errors) {
   }
 }
 
-try {
-  await waitForPort(20_000);
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--use-gl=angle",
-      "--use-angle=swiftshader",
-      "--enable-webgl",
-      "--ignore-gpu-blocklist",
-      "--enable-precise-memory-info",
-    ],
-  });
+async function sampleOptInFrame(browser, errors) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  noteConsole(page, errors, "pixels");
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-    if (process.env.FRAG_SLOW_FRAMES === "1") await installSlowFrames(page);
-    page.on("console", (message) => {
-      const text = message.text();
-      if (message.type() === "error") errors.push(`console: ${text}`);
-      if (message.type() === "warning") {
-        const allowed = warningAllowlist.find((entry) => entry.pattern.test(text));
-        if (!allowed) errors.push(`console warning: ${text}`);
-      }
+    // The play pages leave the drawing buffer unpreserved. This load is the
+    // harness asking for the copy, so one drawImage can see the frame.
+    await page.addInitScript(() => {
+      window.__fragKeepDrawingBuffer = true;
     });
-    page.on("pageerror", (error) => {
-      errors.push(`pageerror: ${error.message}`);
-    });
-    page.on("request", (request) => {
-      const url = request.url();
-      if (url.startsWith(`${origin}/`) || url === origin || url.startsWith("data:")) return;
-      errors.push(`unexpected network request: ${url}`);
-    });
-
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 15_000 });
     await page.waitForSelector("canvas", { timeout: 5_000 });
-    await assertDrones(page, errors, "at load");
-    const storedOnLoad = await page.evaluate(() => Object.keys(localStorage));
-    if (storedOnLoad.length > 0) {
-      errors.push(`localStorage was not empty on load: ${storedOnLoad.join(", ")}`);
-    }
     await page.evaluate(
       () =>
         new Promise((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
         }),
     );
-
-    const sample = await page.evaluate(() => {
+    return await page.evaluate(() => {
       const canvas = document.querySelector("canvas");
       if (!(canvas instanceof HTMLCanvasElement)) return { error: "canvas missing" };
       const probe = document.createElement("canvas");
@@ -2099,7 +2087,28 @@ try {
       }
       return { width: canvas.width, height: canvas.height, colored };
     });
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    return { error: `pixel sample failed: ${message}` };
+  } finally {
+    await page.close();
+  }
+}
 
+try {
+  await waitForPort(20_000);
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--enable-webgl",
+      "--ignore-gpu-blocklist",
+      "--enable-precise-memory-info",
+    ],
+  });
+  try {
+    const sample = await sampleOptInFrame(browser, errors);
     if (sample.error) errors.push(sample.error);
     else if (!sample.width || !sample.height) errors.push("canvas has no pixels");
     else if (sample.colored < 8) {
@@ -2107,6 +2116,29 @@ try {
         `canvas does not show a rendered object (${sample.colored} non-background samples)`,
       );
     }
+
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    if (process.env.FRAG_SLOW_FRAMES === "1") await installSlowFrames(page);
+    noteConsole(page, errors, "");
+    page.on("request", (request) => {
+      const url = request.url();
+      if (url.startsWith(`${origin}/`) || url === origin || url.startsWith("data:")) return;
+      errors.push(`unexpected network request: ${url}`);
+    });
+
+    await page.goto(`${origin}/`, { waitUntil: "load", timeout: 15_000 });
+    await page.waitForSelector("canvas", { timeout: 5_000 });
+    await assertDrones(page, errors, "at load");
+    const storedOnLoad = await page.evaluate(() => Object.keys(localStorage));
+    if (storedOnLoad.length > 0) {
+      errors.push(`localStorage was not empty on load: ${storedOnLoad.join(", ")}`);
+    }
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
 
     assertHorizontalFov(await readView(page), errors, "initial viewport");
     await assertCanvasAspect(page, errors, "initial viewport");
@@ -2176,7 +2208,8 @@ try {
 
     // No page.screenshot here. On software GL the bloom frame occupies the
     // compositor, and Playwright's capture waits for that frame until it times out.
-    // The pixels are already checked by the canvas sample above.
+    // The opt-in buffer page already counted the canvas colors. This play page
+    // does not preserve the drawing buffer and does not read pixels.
 
     await page.setViewportSize({ width: 900, height: 700 });
     await page.evaluate(
@@ -2213,7 +2246,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / 0 armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> pause -> resume -> reload, readable type at 480p, 720p, 1280x800, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, no console warnings outside the allowlist, no third-party requests, localStorage empty`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / 0 armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> M mutes -> damage -> pause -> resume -> reload, readable type at 480p, 720p, 1280x800, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, no console warnings, no ReadPixels stall, no third-party requests, localStorage empty`,
       );
     }
   } finally {

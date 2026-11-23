@@ -43,6 +43,7 @@ Looking and buttons are read from one input state each frame. `down` is held. `p
 | R | `reload` | Reload the Quill Driver. An empty magazine reloads on its own when rounds remain. |
 | Esc | `pause` | Pause and release the pointer. Click the pause overlay to resume. |
 | Backquote or F1 | `debug` | Toggle the FPS and position readout. The shell toggle still works while paused. |
+| M | `mute` | Toggle procedural audio. The HUD shows MUTE while silenced. Not saved. Works while paused, and it does not start play. |
 | `[` `]` | `sensDown` `sensUp` | Temporary mouse sensitivity. Not saved. |
 
 There is no gamepad or touch input.
@@ -57,7 +58,7 @@ On the ground, forward, back, and strafe share an 8 m/s wish. Acceleration towar
 
 ## VEC-9 Quill Driver
 
-The prototype weapon is a magnetic flechette carbine. Holding the left mouse fires one rail-spike every 0.125 s, with no spread. A click that ends before the next frame still fires one shot when the weapon is ready. Clicking faster than eight a second does not, and clicks during a reload or an empty magazine do not fire once that gate ends. Each flechette is a projectile: it travels at 70 m/s, is about 0.35 m long with a 0.06 m radius, and despawns after 1 s or 70 m. A hit deals 9 damage with no falloff. The magazine holds 40 and the reserve starts at 40, capped at 80. Reserve never goes negative. Reload takes 1.4 s, from R or automatically when the magazine is empty and rounds remain, and the trigger does nothing during that reload. Pulling the trigger with an empty magazine and an empty reserve does not fire and does not cycle. Each shot adds a 0.12° upward view punch that settles before the next shot if aim is held. The viewmodel, the cyan-magenta muzzle flash, the flechettes, and the tracers are procedural geometry. There is no audio.
+The prototype weapon is a magnetic flechette carbine. Holding the left mouse fires one rail-spike every 0.125 s, with no spread. A click that ends before the next frame still fires one shot when the weapon is ready. Clicking faster than eight a second does not, and clicks during a reload or an empty magazine do not fire once that gate ends. Each flechette is a projectile: it travels at 70 m/s, is about 0.35 m long with a 0.06 m radius, and despawns after 1 s or 70 m. A hit deals 9 damage with no falloff. The magazine holds 40 and the reserve starts at 40, capped at 80. Reserve never goes negative. Reload takes 1.4 s, from R or automatically when the magazine is empty and rounds remain, and the trigger does nothing during that reload. Pulling the trigger with an empty magazine and an empty reserve does not fire and does not cycle. Each shot adds a 0.12° upward view punch that settles before the next shot if aim is held. The viewmodel, the cyan-magenta muzzle flash, the flechettes, and the tracers are procedural geometry. Shots, reloads, hits, pickups, and the low-HP pulse are procedural Web Audio. M mutes them. Nothing is loaded from a file.
 
 ## Pickups and damage
 
