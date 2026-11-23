@@ -92,12 +92,14 @@ html[data-cursor="none"] canvas {
 .hud-label {
   display: block;
   margin-bottom: 4px;
-  /* #f7f8ff on #14151c is about 17:1, above the WCAG AA 4.5:1 floor. */
+  /* Cap height of a 12px em is about 8px of ink, which is what read as 6–8px.
+     18px bold keeps the rendered capitals at or above 12px. #f7f8ff on #14151c
+     is about 17:1. */
   color: #f7f8ff;
-  font-size: 12px;
-  font-size: clamp(12px, 1.7vh, 18px);
-  letter-spacing: 0.14em;
-  line-height: 1.2;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
   text-shadow:
     1px 0 0 #07080d,
     -1px 0 0 #07080d,
@@ -124,6 +126,42 @@ html[data-cursor="none"] canvas {
 
 #hud-ammo-stat {
   margin-left: auto;
+}
+
+#hud-wave {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  margin: 0;
+  padding: 4px 10px;
+  background: #14151c;
+  color: #f7f8ff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  transform: translateX(-50%);
+}
+
+#hud[data-mode="hidden"] #hud-wave,
+#hud[data-mode="dead"] #hud-wave {
+  visibility: hidden;
+}
+
+.hud-cue {
+  display: block;
+  margin-top: 4px;
+  color: #111118;
+  background: #f5a623;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.hud-cue[hidden] {
+  display: none;
 }
 
 #death-recap {

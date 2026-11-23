@@ -24,7 +24,26 @@ export type HudElements = {
   ammo: HTMLElement;
   armorStat: HTMLElement;
   death: HTMLElement;
+  cue?: HTMLElement;
 };
+
+/** The recap ignores input for this long so a held shot cannot skip it. */
+export const RECAP_ARM_SECONDS = 1;
+
+export function recapAcceptsInput(elapsedSeconds: number): boolean {
+  return Number.isFinite(elapsedSeconds) && elapsedSeconds >= RECAP_ARM_SECONDS - 1e-6;
+}
+
+/** A death click restarts only from the live recap. Pause and a blur do not. */
+export function acceptRestartClick(input: {
+  mode: string | null;
+  phase: string | null;
+  hidden: boolean;
+}): boolean {
+  if (input.hidden) return false;
+  if (input.phase !== "playing") return false;
+  return input.mode === "dead";
+}
 
 export function hudMode(phase: string | null, hp: number): HudMode {
   // Pause stays in front of a death recap so Esc still reaches the pause overlay.
@@ -59,6 +78,12 @@ export function applyHud(els: HudElements, view: HudReadout, recap?: DeathRecap 
   else els.armorStat.setAttribute("aria-hidden", "true");
   els.death.hidden = view.mode !== "dead";
   if (recap) els.death.textContent = deathRecapText(recap);
+  if (els.cue) {
+    const empty = view.ammo === "0+0";
+    const reloading = !empty && view.ammo.startsWith("0+");
+    els.cue.hidden = !empty && !reloading;
+    els.cue.textContent = empty ? "EMPTY" : "RELOAD";
+  }
 }
 
 export function bindHud(

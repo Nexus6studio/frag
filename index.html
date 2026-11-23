@@ -107,6 +107,13 @@
         text-transform: uppercase;
       }
 
+      #content-warning-title {
+        font-size: clamp(28px, 4vh, 44px);
+        letter-spacing: 0.02em;
+        line-height: 1.15;
+        text-transform: none;
+      }
+
       .copy {
         margin: 0;
         color: #d5d8e2;
@@ -162,12 +169,8 @@
         aria-labelledby="content-warning-title"
       >
         <div class="panel">
-          <p class="eyebrow">Content warning</p>
-          <h1 id="content-warning-title">Frag</h1>
-          <p class="copy">
-            This prototype contains blood and gibs, fictional violence, and flashing lights
-            (muzzle flash, neon, bloom).
-          </p>
+          <h1 id="content-warning-title">Content warning</h1>
+          <p class="copy">Contains fast-paced combat against robotic enemies, with explosions, sparks and debris. Includes flashing lights and rapid motion.</p>
           <button id="content-warning-continue" type="button" autofocus>Continue</button>
         </div>
       </section>
@@ -199,6 +202,21 @@
         <div class="panel">
           <h1 id="pause-title">Paused</h1>
           <p class="copy">Click to resume.</p>
+        </div>
+      </section>
+
+      <section
+        id="context-lost"
+        class="overlay"
+        hidden
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="context-lost-title"
+      >
+        <div class="panel">
+          <h1 id="context-lost-title">Graphics interrupted</h1>
+          <p class="copy">The display device stopped responding. Frag will restore the scene when it can. Reload the page if it stays blank.</p>
+          <button id="context-lost-reload" type="button">Reload</button>
         </div>
       </section>
     </div>

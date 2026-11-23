@@ -14,6 +14,7 @@ import {
   WISP_BOLT_GAP,
   WISP_BOLT_RADIUS,
   WISP_BOLT_SPEED,
+  WISP_SPAWN_GRACE,
   WISP_BURST_GAP,
   WISP_CLOSE,
   WISP_COUNT,
@@ -34,6 +35,8 @@ import {
   wispVisorHex,
 } from "../src/wisp.ts";
 import { DRONE_CAP } from "../src/waves.ts";
+import { traceSegment } from "../src/trace.ts";
+import { boltVisualScale } from "../src/wisp-view.ts";
 
 const DT = 1 / 120;
 
@@ -219,7 +222,7 @@ test("bolts travel at 18 m/s and stay in a fixed pool", () => {
   const feet = { x: 40, y: GROUND_Y, z: 40 };
   let bolt = null;
   let guard = 0;
-  while (!bolt && guard < 2) {
+  while (!bolt && guard < WISP_SPAWN_GRACE + 1) {
     sim.update(DT, feet);
     guard += DT;
     bolt = sim.bolts.find((slot) => slot.alive) ?? null;
@@ -389,4 +392,109 @@ test("a live bolt deals 8 through applyDamage when the player has armor", () => 
   }
   assert.equal(player.get().hp, 77);
   assert.equal(player.get().armor, 4);
+});
+
+test("drones do not fire during the 2 s spawn grace, at 120 fps or 5 fps", () => {
+  for (const dt of [DT, 0.2]) {
+    const { sim } = atriumSim();
+    const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
+    let t = 0;
+    while (t < WISP_SPAWN_GRACE - dt) {
+      sim.update(dt, feet);
+      t += dt;
+    }
+    assert.equal(sim.boltCount(0), 0, `${dt} s steps fired during grace`);
+    assert.equal(sim.boltCount(1), 0, `${dt} s steps fired during grace`);
+    while (t < WISP_SPAWN_GRACE + 0.35) {
+      sim.update(dt, feet);
+      t += dt;
+    }
+    assert.ok(sim.boltCount(0) >= 1, `lead did not fire after grace at dt ${dt}`);
+    const first = sim.boltTime(0, 0);
+    assert.ok(first >= WISP_SPAWN_GRACE + WISP_TELEGRAPH - 0.02, `first bolt ${first}`);
+  }
+});
+
+test("burst cadence holds at 5 fps and two drones stay under the scripted damage rate", () => {
+  const open = {
+    boxes: [{ min: { x: -40, y: -1, z: -40 }, max: { x: 40, y: 0, z: 40 } }],
+    ramps: [],
+  };
+  const player = createPlayerState({ hp: 500 });
+  const sim = createWispSim({
+    hull: open,
+    player,
+    hitboxes: createHitboxWorld(),
+    origin: { x: 0, y: 0, z: 0 },
+  });
+  const feet = { x: 0, y: 0, z: 0 };
+  const dt = 0.2;
+  let t = 0;
+  while (t < 12) {
+    sim.update(dt, feet);
+    t += dt;
+  }
+  for (const index of [0, 1]) {
+    const bolts = sim.boltCount(index);
+    assert.ok(bolts >= 4, `drone ${index} fired ${bolts} at 5 fps`);
+    for (let i = 0; i + 1 < bolts; i += 2) {
+      const gap = sim.boltTime(index, i + 1) - sim.boltTime(index, i);
+      assert.ok(Math.abs(gap - WISP_BOLT_GAP) < 0.02, `5 fps bolt gap ${gap}`);
+      if (i + 2 < bolts) {
+        const burst = sim.boltTime(index, i + 2) - sim.boltTime(index, i + 1);
+        assert.ok(Math.abs(burst - WISP_BURST_GAP) < 0.02, `5 fps burst gap ${burst}`);
+      }
+    }
+  }
+  const dealt = 500 - player.get().hp;
+  const window = 12 - WISP_SPAWN_GRACE;
+  const perSecond = dealt / window;
+  const scripted = (2 * 2 * WISP_BOLT_DAMAGE) / (WISP_BOLT_GAP + WISP_BURST_GAP);
+  console.log(
+    `wisp worst case ${scripted.toFixed(2)} HP/s if both drones hit every bolt; measured ${perSecond.toFixed(2)} HP/s over ${window.toFixed(1)} s (${dealt} HP)`,
+  );
+  assert.ok(perSecond <= scripted + 0.5, `measured ${perSecond} exceeded the scripted ${scripted}`);
+});
+
+test("a 5 fps bolt step stops on every atrium hull", () => {
+  const hull = createAtriumHull();
+  const travel = WISP_BOLT_SPEED * 0.2;
+  let boxes = 0;
+  let ramps = 0;
+  for (const box of hull.boxes) {
+    const cy = (box.min.y + box.max.y) / 2;
+    const cz = (box.min.z + box.max.z) / 2;
+    if (cy < box.min.y || cy > box.max.y) continue;
+    const from = { x: box.min.x - 0.3, y: cy, z: cz };
+    const to = { x: from.x + travel, y: cy, z: cz };
+    if (from.z < box.min.z || from.z > box.max.z) continue;
+    const hit = traceSegment(from, to, hull);
+    assert.ok(hit, `5 fps step missed a box at y ${cy.toFixed(2)}`);
+    assert.ok(hit.point.x <= box.min.x + 0.05, `bolt tunneled a box to x ${hit.point.x}`);
+    boxes += 1;
+  }
+  for (const ramp of hull.ramps) {
+    const x = (ramp.minX + ramp.maxX) / 2;
+    const z = (ramp.minZ + ramp.maxZ) / 2;
+    const span = ramp.maxZ - ramp.minZ;
+    const slope = ramp.rise / span;
+    const y = ramp.yAtMaxZ + slope * (ramp.maxZ - z) - 0.4;
+    const from = { x, y, z };
+    const to = { x, y: y + travel, z };
+    const hit = traceSegment(from, to, hull);
+    assert.ok(hit, `5 fps step missed ramp ${x.toFixed(1)} ${z.toFixed(1)}`);
+    assert.ok(hit.point.y < y + travel - 0.5, `bolt passed through a ramp at y ${hit.point.y}`);
+    ramps += 1;
+  }
+  console.log(`5 fps bolt sweep stopped on ${boxes} boxes and ${ramps} ramps`);
+  assert.ok(boxes > 10);
+  assert.equal(ramps, hull.ramps.length);
+});
+
+test("a near bolt is culled and a far bolt stays at the 0.25 m scale", () => {
+  assert.equal(boltVisualScale(0.4), 0);
+  assert.equal(boltVisualScale(0.99), 0);
+  const atOne = boltVisualScale(1);
+  assert.ok(atOne > 0 && atOne < 1, `scale at 1 m is ${atOne}`);
+  assert.equal(boltVisualScale(4), 1);
 });

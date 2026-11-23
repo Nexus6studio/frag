@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { SHOW_ARMOR, applyHud, bindHud, hudMode, hudReadout } from "../src/hud/model.ts";
+import {
+  SHOW_ARMOR,
+  acceptRestartClick,
+  applyHud,
+  bindHud,
+  hudMode,
+  hudReadout,
+  recapAcceptsInput,
+} from "../src/hud/model.ts";
 import { START_VITALS, createPlayerState, exposePlayerDebug } from "../src/player/state.ts";
 
 function fakeHud() {
@@ -128,6 +136,35 @@ test("turning showArmor on reveals the same slot", () => {
   assert.equal(els.armorStat.attrs["aria-hidden"], undefined);
   assert.equal(els.hp.textContent, "100");
   assert.equal(els.ammo.textContent, "40+40");
+});
+
+test("the recap ignores input for one second", () => {
+  assert.equal(recapAcceptsInput(0), false);
+  assert.equal(recapAcceptsInput(0.99), false);
+  assert.equal(recapAcceptsInput(1), true);
+  assert.equal(recapAcceptsInput(1.2), true);
+});
+
+test("zero ammo shows an empty cue and a dry magazine shows reload", () => {
+  const els = fakeHud();
+  els.cue = { hidden: true, textContent: "" };
+  applyHud(els, { hp: "0", armor: "0", ammo: "0+12", showArmor: false, mode: "play" });
+  assert.equal(els.cue.hidden, false);
+  assert.equal(els.cue.textContent, "RELOAD");
+  applyHud(els, { hp: "0", armor: "0", ammo: "0+0", showArmor: false, mode: "play" });
+  assert.equal(els.cue.hidden, false);
+  assert.equal(els.cue.textContent, "EMPTY");
+  applyHud(els, { hp: "100", armor: "0", ammo: "40+40", showArmor: false, mode: "play" });
+  assert.equal(els.cue.hidden, true);
+});
+
+test("a death click does not restart from pause or a blur", () => {
+  assert.equal(acceptRestartClick({ mode: "dead", phase: "playing", hidden: false }), true);
+  assert.equal(acceptRestartClick({ mode: "dead", phase: "paused", hidden: false }), false);
+  assert.equal(acceptRestartClick({ mode: "dead", phase: "playing", hidden: true }), false);
+  assert.equal(acceptRestartClick({ mode: "dim", phase: "paused", hidden: false }), false);
+  assert.equal(acceptRestartClick({ mode: "play", phase: "playing", hidden: false }), false);
+  assert.equal(acceptRestartClick({ mode: "dead", phase: null, hidden: false }), false);
 });
 
 test("hud mode hides non-play phases and dims pause", () => {

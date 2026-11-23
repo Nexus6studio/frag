@@ -19,7 +19,15 @@ import {
   onGroundRing,
   stepAtrium,
 } from "../src/atrium.ts";
-import { CAPSULE_RADIUS, SIM_DT, createMoveState, planarSpeedOf } from "../src/move.ts";
+import {
+  CAMERA_NEAR,
+  CAPSULE_RADIUS,
+  EYE_HEIGHT,
+  SIM_DT,
+  createMoveState,
+  eyeSurfaceClearance,
+  planarSpeedOf,
+} from "../src/move.ts";
 import { traceRay, traceSegment } from "../src/trace.ts";
 
 const hull = createAtriumHull();
@@ -495,6 +503,32 @@ test("holding W into the NW corner stores about 0 m/s", () => {
   assert.ok(Math.hypot(state.position.x - parked.x, state.position.z - parked.z) < 0.05);
   assert.equal(state.position.y > KILL_Y && Math.abs(state.position.x) < MAP_HALF, true);
   console.log(`NW corner speed m/s ${speed.toFixed(3)} at ${parked.x.toFixed(2)},${parked.z.toFixed(2)}`);
+});
+
+test("walking under the ramps keeps the eye a near-plane clear of the mesh", () => {
+  const ne = ATRIUM_RAMPS.find((ramp) => ramp.id === "ne");
+  const nw = ATRIUM_RAMPS.find((ramp) => ramp.id === "nw");
+  let worst = Infinity;
+  for (const ramp of [ne, nw]) {
+    let state = createMoveState({ x: ramp.lineX, y: GROUND_Y, z: ramp.minZ + 1.2 });
+    for (let i = 0; i < Math.round(4 / SIM_DT); i += 1) {
+      state = stepAtrium(state, { forward: 1, strafe: 0, jump: false, yawDeg: 180 }, SIM_DT);
+      const gap = eyeSurfaceClearance(state.position, hull);
+      if (gap < worst) worst = gap;
+      assert.ok(
+        gap + 1e-4 >= CAMERA_NEAR,
+        `${ramp.id} eye clearance ${gap.toFixed(3)} m at ${state.position.x.toFixed(2)} ${state.position.y.toFixed(2)} ${state.position.z.toFixed(2)} (eye ${EYE_HEIGHT}, near ${CAMERA_NEAR})`,
+      );
+    }
+  }
+  let ring = createMoveState({ x: 14.2, y: CATWALK_Y, z: 8 });
+  for (let i = 0; i < Math.round(3 / SIM_DT); i += 1) {
+    ring = stepAtrium(ring, { forward: 1, strafe: 0, jump: false, yawDeg: 180 }, SIM_DT);
+    const gap = eyeSurfaceClearance(ring.position, hull);
+    if (gap < worst) worst = gap;
+    assert.ok(gap + 1e-4 >= CAMERA_NEAR, `ring eye clearance ${gap.toFixed(3)}`);
+  }
+  console.log(`eye clearance under ramps and the ring ${worst.toFixed(3)} m, near plane ${CAMERA_NEAR} m`);
 });
 
 test("a standing hop from rest clears the 0.8 m well lip", () => {

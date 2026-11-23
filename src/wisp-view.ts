@@ -18,11 +18,13 @@ import {
   PointsMaterial,
   Quaternion,
   Vector3,
+  type PerspectiveCamera,
   type Scene,
 } from "three";
 import { DRONE_CAP } from "./waves.ts";
 import {
   WISP_BOLT_CAP,
+  WISP_BOLT_RADIUS,
   WISP_FLUID_CAP,
   WISP_FLUID_COLOR,
   WISP_GIB_CAP,
@@ -41,7 +43,25 @@ const _matrix = new Matrix4();
 const _up = new Vector3(0, 1, 0);
 const _color = new Color();
 
-export function mountWispView(scene: Scene, sim: WispSim): { sync(): void } {
+/** Horizontal field the bolt scale is fitted to. Matches the 105° view. */
+const BOLT_HFOV = (105 * Math.PI) / 180;
+/** A bolt drawn closer than this is culled so it cannot fill the view. */
+const BOLT_CULL_METERS = 1;
+/** Largest fraction of the screen a bolt sprite may cover. */
+const BOLT_MAX_COVER = 0.15;
+
+/**
+ * Visual scale for a 0.25 m bolt. Gameplay radius is unchanged.
+ * Inside 1 m the bolt is not drawn. Farther away it never subtends more than
+ * about 15% of the horizontal view.
+ */
+export function boltVisualScale(distance: number): number {
+  if (!(distance >= BOLT_CULL_METERS)) return 0;
+  const maxRadius = Math.tan((BOLT_MAX_COVER * BOLT_HFOV) / 2) * distance;
+  return Math.min(1, maxRadius / WISP_BOLT_RADIUS);
+}
+
+export function mountWispView(scene: Scene, sim: WispSim, camera?: PerspectiveCamera): { sync(): void } {
   const bodyMat = new MeshBasicMaterial({
     vertexColors: true,
     toneMapped: false,
@@ -126,8 +146,8 @@ export function mountWispView(scene: Scene, sim: WispSim): { sync(): void } {
         _color.setHex(wispVisorHex(drone.aggro));
         visors.setColorAt(bodyCount, _color);
         bodyCount += 1;
-        if (drone.phase === "telegraph" && sim.time > 0) {
-          const pulse = 1.28 + Math.sin(sim.time * 28) * 0.08;
+        if (drone.phase === "telegraph") {
+          const pulse = 2.15 + Math.sin(sim.time * 22) * 0.28;
           place(glows, glowCount, drone.position.x, drone.position.y, drone.position.z, spin, pulse);
           glowCount += 1;
         }
@@ -135,7 +155,7 @@ export function mountWispView(scene: Scene, sim: WispSim): { sync(): void } {
       show(bodies, bodyCount);
       show(visors, bodyCount);
       if (visors.instanceColor) visors.instanceColor.needsUpdate = true;
-      glowMat.opacity = 0.35 + Math.sin(sim.time * 22) * 0.15;
+      glowMat.opacity = 0.82 + Math.sin(sim.time * 22) * 0.14;
       show(glows, glowCount);
 
       let boltCount = 0;
@@ -143,7 +163,12 @@ export function mountWispView(scene: Scene, sim: WispSim): { sync(): void } {
       for (let i = 0; i < shots.length; i += 1) {
         const bolt = shots[i]!;
         if (!bolt.alive) continue;
-        place(bolts, boltCount, bolt.x, bolt.y, bolt.z, 0, 1);
+        const dist = camera
+          ? Math.hypot(bolt.x - camera.position.x, bolt.y - camera.position.y, bolt.z - camera.position.z)
+          : 4;
+        const scale = boltVisualScale(dist);
+        if (!(scale > 0)) continue;
+        place(bolts, boltCount, bolt.x, bolt.y, bolt.z, 0, scale);
         boltCount += 1;
       }
       show(bolts, boltCount);
