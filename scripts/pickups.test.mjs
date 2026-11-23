@@ -12,7 +12,12 @@ import {
   AMMO_DORMANT,
   AMMO_PICKUP,
   AMMO_RESPAWN_SECONDS,
+  ARMOR_CAP,
+  ARMOR_COLOR,
+  ARMOR_DORMANT,
   ARMOR_ENABLED,
+  ARMOR_PICKUP,
+  ARMOR_RESPAWN_SECONDS,
   HEALTH_COLOR,
   HEALTH_DORMANT,
   HEALTH_PICKUP,
@@ -22,6 +27,7 @@ import {
   applyDamage,
   createPickupSim,
   exposeDamageDebug,
+  grantArmor,
   grantHealth,
   grantReserve,
 } from "../src/pickups.ts";
@@ -82,6 +88,10 @@ function catwalkHealth(sim) {
 
 function wellAmmo(sim) {
   return sim.pads.find((pad) => pad.kind === "ammo" && pad.y === 0);
+}
+
+function groundArmor(sim) {
+  return sim.pads.find((pad) => pad.kind === "armor" && pad.y === GROUND_Y);
 }
 
 test("applyDamage absorbs floor(D·2/3) and always costs at least 1 HP", () => {
@@ -270,7 +280,8 @@ test("the HUD follows a health collect and a damage hit, and death uses the reca
   bindHud(player, els, () => "playing");
   assert.equal(els.hp.textContent, "90");
   assert.equal(els.ammo.textContent, "40+40");
-  assert.equal(els.armorStat.style.visibility, "hidden");
+  assert.equal(els.armor.textContent, "0");
+  assert.equal(els.armorStat.style.visibility, "visible");
 
   const sim = createPickupSim();
   sim.step(0, feetAt(groundHealth(sim)), player);
@@ -287,11 +298,13 @@ test("the HUD follows a health collect and a damage hit, and death uses the reca
   assert.equal(els.ammo.textContent, "40+80");
 
   player.set({ armor: 15 });
+  assert.equal(els.armor.textContent, "15");
+  assert.equal(els.armorStat.style.visibility, "visible");
   const hit = applyDamage(30, player.get().hp, player.get().armor);
   player.set({ hp: hit.hp, armor: hit.armor });
   assert.equal(els.hp.textContent, "85");
   assert.equal(els.armor.textContent, "0");
-  assert.equal(els.armorStat.style.visibility, "hidden");
+  assert.equal(els.armorStat.style.visibility, "visible");
   assert.equal(els.ammo.textContent, "40+80");
 
   const speck = applyDamage(0.2, player.get().hp, player.get().armor);
@@ -305,36 +318,86 @@ test("the HUD follows a health collect and a damage hit, and death uses the reca
   assert.equal(els.death.hidden, false);
 });
 
-test("armor pads stay out of the sim and out of the scene while ARMOR_ENABLED is false", () => {
-  assert.equal(ARMOR_ENABLED, false);
+test("an armor pad adds 25, caps at 100, waits 25 s, and stays lit at 100", () => {
+  assert.equal(ARMOR_ENABLED, true);
+  assert.equal(ARMOR_PICKUP, 25);
+  assert.equal(ARMOR_CAP, 100);
+  assert.equal(ARMOR_RESPAWN_SECONDS, 25);
+  assert.deepEqual(grantArmor(90), { armor: 100, gained: 10 });
+  assert.deepEqual(grantArmor(ARMOR_CAP), { armor: ARMOR_CAP, gained: 0 });
   assert.equal(ATRIUM_PADS.filter((pad) => pad.kind === "armor").length, 2);
+
+  const player = createPlayerState();
   const sim = createPickupSim();
-  assert.equal(sim.pads.some((pad) => pad.kind === "armor"), false);
+  assert.equal(sim.pads.filter((pad) => pad.kind === "armor").length, 2);
   assert.equal(sim.pads.filter((pad) => pad.kind === "health").length, 2);
   assert.equal(sim.pads.filter((pad) => pad.kind === "ammo").length, 3);
+  const pad = groundArmor(sim);
+  const upper = sim.pads.find((entry) => entry.kind === "armor" && entry.y === CATWALK_Y);
+  assert.ok(pad);
+  assert.ok(upper);
 
-  const player = createPlayerState({ hp: 80 });
-  for (const landmark of ATRIUM_PADS) {
-    if (landmark.kind !== "armor") continue;
-    sim.step(1, { x: landmark.position.x, y: landmark.position.y, z: landmark.position.z }, player);
-  }
-  assert.equal(player.get().hp, 80);
+  sim.step(0, feetAt(pad), player);
+  assert.equal(player.get().armor, 25);
+  assert.equal(player.get().hp, 100);
+  assert.equal(pad.cooldown, ARMOR_RESPAWN_SECONDS);
+  assert.equal(upper.cooldown, 0);
+
+  player.set({ armor: 0 });
+  sim.step(ARMOR_RESPAWN_SECONDS - 0.001, feetAt(pad), player);
   assert.equal(player.get().armor, 0);
-  assert.ok(sim.pads.every((pad) => pad.cooldown === 0));
+  assert.ok(pad.cooldown > 0);
+
+  sim.step(0.001, feetAt(pad), player);
+  assert.equal(player.get().armor, ARMOR_PICKUP);
+  assert.equal(pad.cooldown, ARMOR_RESPAWN_SECONDS);
+
+  player.set({ armor: 90 });
+  sim.step(ARMOR_RESPAWN_SECONDS, feetAt(pad), player);
+  assert.equal(player.get().armor, ARMOR_CAP);
+  assert.equal(pad.cooldown, ARMOR_RESPAWN_SECONDS);
+
+  sim.step(ARMOR_RESPAWN_SECONDS, feetAt(pad), player);
+  assert.equal(player.get().armor, ARMOR_CAP);
+  assert.equal(pad.cooldown, 0);
+
+  const beside = {
+    x: pad.x + PAD_TRIGGER_HALF_XZ + CAPSULE_RADIUS + 0.05,
+    y: pad.y,
+    z: pad.z,
+  };
+  player.set({ armor: 10 });
+  sim.step(0, beside, player);
+  assert.equal(player.get().armor, 10);
+  assert.equal(pad.cooldown, 0);
+
+  sim.reset();
+  player.restart();
+  assert.equal(pad.cooldown, 0);
+  assert.equal(upper.cooldown, 0);
+  assert.deepEqual(player.get(), { hp: 100, armor: 0, mag: 40, reserve: 40 });
 
   const view = buildAtriumView();
-  assert.equal(view.pads.length, 5);
-  assert.equal(view.pads.some((pad) => pad.kind === "armor"), false);
-  assert.equal(view.meshes.some((mesh) => mesh.name.includes("armor")), false);
+  assert.equal(view.pads.length, 7);
+  const armor = view.pads.filter((entry) => entry.kind === "armor");
+  assert.equal(armor.length, 2);
+  assert.equal(view.meshes.filter((mesh) => mesh.name.includes("armor")).length, 2);
   assert.ok(view.meshes.length <= 16, `meshes ${view.meshes.length}`);
+  assert.notEqual(ARMOR_COLOR, HEALTH_COLOR);
+  assert.notEqual(ARMOR_COLOR, AMMO_COLOR);
 
-  const health = view.pads.find((pad) => pad.kind === "health");
-  const ammo = view.pads.find((pad) => pad.kind === "ammo");
+  const health = view.pads.find((entry) => entry.kind === "health");
+  const ammo = view.pads.find((entry) => entry.kind === "ammo");
   assert.ok(health.mesh.material.color.equals(new Color(HEALTH_COLOR)));
   assert.ok(ammo.mesh.material.color.equals(new Color(AMMO_COLOR)));
-  assert.equal(health.mesh.visible, true);
+  assert.ok(armor[0].mesh.material.color.equals(new Color(ARMOR_COLOR)));
+  assert.equal(armor[0].mesh.visible, true);
+  armor[0].setAvailable(false);
+  assert.equal(armor[0].mesh.visible, true);
+  assert.ok(armor[0].mesh.material.color.equals(new Color(ARMOR_DORMANT)));
+  armor[0].setAvailable(true);
+  assert.ok(armor[0].mesh.material.color.equals(new Color(ARMOR_COLOR)));
   health.setAvailable(false);
-  assert.equal(health.mesh.visible, true);
   assert.ok(health.mesh.material.color.equals(new Color(HEALTH_DORMANT)));
   health.setAvailable(true);
   assert.ok(health.mesh.material.color.equals(new Color(HEALTH_COLOR)));

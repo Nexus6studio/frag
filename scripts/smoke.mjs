@@ -492,21 +492,24 @@ async function assertReadableType(page, errors, label) {
       probe.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
       return probe.measureText(el.textContent ?? "").actualBoundingBoxAscent;
     };
-    const labels = [...document.querySelectorAll("#hud-hp-stat .hud-label, #hud-ammo-stat .hud-label, #hud-wave")].map(
-      (el) => {
-        const style = getComputedStyle(el);
-        const stat = el.parentElement instanceof HTMLElement ? getComputedStyle(el.parentElement) : null;
-        const backing = el.id === "hud-wave" ? style.backgroundColor : (stat?.backgroundColor ?? "");
-        return {
-          text: el.textContent,
-          size: px(el),
-          rendered: ink(el, style),
-          box: el.getBoundingClientRect().height,
-          color: style.color,
-          backing,
-        };
-      },
-    );
+    const labels = [
+      ...document.querySelectorAll(
+        "#hud-hp-stat .hud-label, #hud-armor-stat .hud-label, #hud-ammo-stat .hud-label, #hud-wave",
+      ),
+    ].map((el) => {
+      const style = getComputedStyle(el);
+      const stat = el.parentElement instanceof HTMLElement ? getComputedStyle(el.parentElement) : null;
+      const backing = el.id === "hud-wave" ? style.backgroundColor : (stat?.backgroundColor ?? "");
+      return {
+        text: el.textContent,
+        stat: el.id !== "hud-wave",
+        size: px(el),
+        rendered: ink(el, style),
+        box: el.getBoundingClientRect().height,
+        color: style.color,
+        backing,
+      };
+    });
     return {
       copy: px(document.querySelector(".copy")),
       labels,
@@ -515,10 +518,15 @@ async function assertReadableType(page, errors, label) {
     };
   });
   if (!(fonts.copy >= 16)) errors.push(`${label}: body text is ${fonts.copy}px at ${fonts.height}px tall`);
-  if (fonts.labels.length < 3) errors.push(`${label}: expected HP, AMMO, and WAVE, found ${fonts.labels.length}`);
+  if (fonts.labels.length < 4) {
+    errors.push(`${label}: expected HP, ARMOR, AMMO, and WAVE, found ${fonts.labels.length}`);
+  }
   for (const hudLabel of fonts.labels) {
     if (!(hudLabel.size >= 12)) {
       errors.push(`${label}: ${hudLabel.text} computed ${hudLabel.size}px at ${fonts.height}px tall`);
+    }
+    if (hudLabel.stat && !(hudLabel.size >= 24)) {
+      errors.push(`${label}: ${hudLabel.text} computed ${hudLabel.size}px, expected a 24px label`);
     }
     if (!(hudLabel.rendered >= 12)) {
       errors.push(`${label}: ${hudLabel.text} rendered ink ${hudLabel.rendered}px (computed ${hudLabel.size}px)`);
@@ -556,22 +564,27 @@ async function assertLabelGlyphs(page, errors) {
     };
     return {
       hp: box("#hud-hp-stat .hud-label"),
+      armor: box("#hud-armor-stat .hud-label"),
       ammo: box("#hud-ammo-stat .hud-label"),
       hpValue: box("#hud-hp"),
+      armorValue: box("#hud-armor"),
       ammoValue: box("#hud-ammo"),
       width: window.innerWidth,
       height: window.innerHeight,
     };
   });
   console.log(
-    `label glyphs at ${measured.width}x${measured.height}: HP ${measured.hp?.height ?? "missing"}px (css ${measured.hp?.css ?? "?"}px) vs number ${measured.hpValue?.height ?? "?"}px, AMMO ${measured.ammo?.height ?? "missing"}px (css ${measured.ammo?.css ?? "?"}px) vs number ${measured.ammoValue?.height ?? "?"}px`,
+    `label glyphs at ${measured.width}x${measured.height}: HP ${measured.hp?.height ?? "missing"}px (css ${measured.hp?.css ?? "?"}px) vs number ${measured.hpValue?.height ?? "?"}px, ARMOR ${measured.armor?.height ?? "missing"}px (css ${measured.armor?.css ?? "?"}px) vs number ${measured.armorValue?.height ?? "?"}px, AMMO ${measured.ammo?.height ?? "missing"}px (css ${measured.ammo?.css ?? "?"}px) vs number ${measured.ammoValue?.height ?? "?"}px`,
   );
   if (measured.width !== 1280 || measured.height !== 800) {
     errors.push(`label glyphs measured at ${measured.width}x${measured.height}, expected 1280x800`);
   }
-  for (const label of [measured.hp, measured.ammo]) {
+  for (const label of [measured.hp, measured.armor, measured.ammo]) {
     if (!label || !(label.height >= 12)) {
       errors.push(`label ${label?.text ?? "missing"} text box is ${label?.height ?? "missing"}px`);
+    }
+    if (!label || !(label.css >= 24)) {
+      errors.push(`label ${label?.text ?? "missing"} css size is ${label?.css ?? "missing"}px`);
     }
   }
   if (!measured.hp || !measured.hpValue || !(measured.hp.height >= measured.hpValue.height * 0.5)) {
@@ -579,10 +592,67 @@ async function assertLabelGlyphs(page, errors) {
       `HP label ${measured.hp?.height ?? "?"}px is under half of the number ${measured.hpValue?.height ?? "?"}px`,
     );
   }
+  if (!measured.armor || !measured.armorValue || !(measured.armor.height >= measured.armorValue.height * 0.5)) {
+    errors.push(
+      `ARMOR label ${measured.armor?.height ?? "?"}px is under half of the number ${measured.armorValue?.height ?? "?"}px`,
+    );
+  }
   if (!measured.ammo || !measured.ammoValue || !(measured.ammo.height >= measured.ammoValue.height * 0.5)) {
     errors.push(
       `AMMO label ${measured.ammo?.height ?? "?"}px is under half of the number ${measured.ammoValue?.height ?? "?"}px`,
     );
+  }
+}
+
+async function assertHudLayout(page, errors, label) {
+  const layout = await page.evaluate(() => {
+    const stat = (id) => {
+      const el = document.querySelector(id);
+      if (!(el instanceof HTMLElement)) return null;
+      const box = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      const labelEl = el.querySelector(".hud-label");
+      const labelStyle = labelEl instanceof HTMLElement ? getComputedStyle(labelEl) : null;
+      return {
+        text: el.querySelector(".hud-value")?.textContent ?? "",
+        visibility: style.visibility,
+        display: style.display,
+        labelSize: labelStyle ? Number.parseFloat(labelStyle.fontSize) : 0,
+        left: box.left,
+        right: box.right,
+        top: box.top,
+        bottom: box.bottom,
+        width: box.width,
+        height: box.height,
+      };
+    };
+    const overlaps = (a, b) =>
+      a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+    const hp = stat("#hud-hp-stat");
+    const armor = stat("#hud-armor-stat");
+    const ammo = stat("#hud-ammo-stat");
+    return {
+      mode: document.querySelector("#hud")?.getAttribute("data-mode") ?? "",
+      hp,
+      armor,
+      ammo,
+      overlap: hp && armor && ammo ? overlaps(hp, armor) || overlaps(armor, ammo) || overlaps(hp, ammo) : true,
+      between: hp && armor && ammo ? armor.left >= hp.right - 1 && armor.right <= ammo.left + 1 : false,
+    };
+  });
+  if (!layout.armor || !layout.hp || !layout.ammo) {
+    errors.push(`${label}: hud stats missing`);
+    return;
+  }
+  if (!(layout.armor.width > 0) || !(layout.armor.height > 0) || layout.overlap || !layout.between) {
+    errors.push(`${label}: armor readout overlaps HP or AMMO`);
+  }
+  if (layout.mode !== "play") return;
+  if (layout.armor.visibility !== "visible" || layout.armor.display === "none") {
+    errors.push(`${label}: armor readout is hidden (${layout.armor.visibility})`);
+  }
+  if (!(layout.armor.labelSize >= 24)) {
+    errors.push(`${label}: ARMOR label is ${layout.armor.labelSize}px`);
   }
 }
 
@@ -761,7 +831,9 @@ async function assertShellFlow(page, errors) {
       hp: hp.textContent,
       ammo: ammo.textContent,
       armorText: armor.textContent,
-      armorVisibility: getComputedStyle(armor).visibility,
+      armorVisibility: getComputedStyle(armorStat).visibility,
+      armorShown: shown(armorStat) && shown(armor),
+      armorLabelSize: Number.parseFloat(getComputedStyle(armorStat.querySelector(".hud-label")).fontSize),
       armorWidth: armorBox.width,
       armorHeight: armorBox.height,
       armorBetween: armorBox.left >= hpBox.right - 1 && armorBox.right <= ammoBox.left + 1,
@@ -790,10 +862,10 @@ async function assertShellFlow(page, errors) {
     if (readout.hp !== "100" || !readout.hpShown) errors.push(`hp readout is ${readout.hp}`);
     await assertDrones(page, errors, "at play start");
     if (readout.ammo !== "40+40" || !readout.ammoShown) errors.push(`ammo readout is ${readout.ammo}`);
-    if (readout.armorText !== "0") errors.push(`armor value is ${readout.armorText}`);
-    if (readout.armorVisibility !== "hidden") {
-      errors.push(`armor readout is visible (${readout.armorVisibility})`);
+    if (readout.armorText !== "0" || !readout.armorShown || readout.armorVisibility !== "visible") {
+      errors.push(`armor readout is ${readout.armorText} (${readout.armorVisibility})`);
     }
+    if (!(readout.armorLabelSize >= 24)) errors.push(`armor label is ${readout.armorLabelSize}px`);
     if (readout.armorWidth <= 0 || readout.armorHeight <= 0 || !readout.armorBetween) {
       errors.push("armor slot is missing from the hud layout");
     }
@@ -1117,10 +1189,12 @@ async function runDevSmoke(browser, errors) {
     await page.locator("#death-recap").click({ force: true });
     const afterRace = await page.evaluate(() => ({
       hp: document.querySelector("#hud-hp")?.textContent ?? "",
+      armor: document.querySelector("#hud-armor")?.textContent ?? "",
       warningHidden: document.querySelector("#content-warning")?.hidden ?? false,
       phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
     }));
     if (afterRace.hp !== "100") errors.push(`restart after a paused death hp is ${afterRace.hp}`);
+    if (afterRace.armor !== "0") errors.push(`restart after a paused death armor is ${afterRace.armor}`);
     if (!afterRace.warningHidden || afterRace.phase === "warning") {
       errors.push(`warning returned after restart from a paused death (${afterRace.phase})`);
     }
@@ -1177,6 +1251,23 @@ async function runDevSmoke(browser, errors) {
       errors.push(`mouse did not leave spawn facing before restart (${JSON.stringify(looked)})`);
     }
 
+    const granted = await page.evaluate(() => {
+      const player = window.__fragPlayer;
+      if (!player || typeof player.set !== "function") return { error: "player debug missing" };
+      player.set({ armor: 25 });
+      const stat = document.querySelector("#hud-armor-stat");
+      const value = document.querySelector("#hud-armor");
+      const style = stat instanceof HTMLElement ? getComputedStyle(stat) : null;
+      return {
+        text: value?.textContent ?? "",
+        visibility: style?.visibility ?? "",
+      };
+    });
+    if (granted.error) errors.push(granted.error);
+    else if (granted.text !== "25" || granted.visibility !== "visible") {
+      errors.push(`dev armor grant readout is ${granted.text} (${granted.visibility})`);
+    }
+
     await page.evaluate(() => window.__fragDamage(500));
     try {
       await page.waitForFunction(
@@ -1211,6 +1302,12 @@ async function runDevSmoke(browser, errors) {
     if (!recap.warningHidden || recap.phase === "warning") {
       errors.push(`dev warning returned on death (${recap.phase})`);
     }
+
+    const held = await page.evaluate(() => {
+      window.__fragPlayer.set({ armor: 40 });
+      return document.querySelector("#hud-armor")?.textContent ?? "";
+    });
+    if (held !== "40") errors.push(`dev armor readout did not track a grant (${held})`);
 
     await page.keyboard.press("Enter");
     const earlyRestart = await page.evaluate(() => document.querySelector("#hud-hp")?.textContent ?? "");
@@ -2006,6 +2103,8 @@ try {
     await page.setViewportSize({ width: 1280, height: 720 });
 
     await assertShellFlow(page, errors);
+    await assertReadableType(page, errors, "720p");
+    await assertHudLayout(page, errors, "720p");
 
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.evaluate(
@@ -2015,6 +2114,7 @@ try {
         }),
     );
     await assertReadableType(page, errors, "1280x800");
+    await assertHudLayout(page, errors, "1280x800");
     await assertLabelGlyphs(page, errors);
     await assertCanvasAspect(page, errors, "after resize 1280x800");
 
@@ -2026,6 +2126,7 @@ try {
         }),
     );
     await assertReadableType(page, errors, "1080p");
+    await assertHudLayout(page, errors, "1080p");
     assertHorizontalFov(await readView(page), errors, "after resize 1920x1080");
     await assertCanvasAspect(page, errors, "after resize 1920x1080");
 
@@ -2037,6 +2138,7 @@ try {
         }),
     );
     await assertReadableType(page, errors, "480p");
+    await assertHudLayout(page, errors, "480p");
     await assertCanvasAspect(page, errors, "after resize 1280x480");
 
     const stats = await page.evaluate(() => {
@@ -2095,7 +2197,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> pause -> resume -> reload, readable type at 480p, 720p, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, no console warnings outside the allowlist, no third-party requests, localStorage empty`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / 0 armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> pause -> resume -> reload, readable type at 480p, 720p, 1280x800, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, no console warnings outside the allowlist, no third-party requests, localStorage empty`,
       );
     }
   } finally {

@@ -171,6 +171,13 @@ test("the stun-blaster hits inside 12 m, stops at range, and stops on atrium wal
   assert.equal(player.get().hp, 96, "armor did not absorb floor(12·2/3)");
   assert.equal(player.get().armor, 7);
 
+  player.set({ hp: 100, armor: 25 });
+  const plated = createEnforcerSim({ hull, player, hitboxes: createHitboxWorld(), grace: 0 });
+  plated.place(0, { x: 0, y: GROUND_Y, z: 8.2 });
+  step(plated, 0.05, near);
+  assert.equal(player.get().hp, 96, "25 armor should lose 4 HP to a 12 blast");
+  assert.equal(player.get().armor, 17);
+
   player.set({ hp: 100, armor: 0 });
   const far = createEnforcerSim({ hull, player, hitboxes: createHitboxWorld(), grace: 0 });
   far.place(0, { x: 0, y: GROUND_Y, z: 8.2 });
