@@ -1,8 +1,13 @@
 // VEC-9 Quill Driver.
 //
 // Magnetic flechette carbine. Holding fire launches one rail-spike on the
-// trigger edge and then one every 0.125 s. Each spike is a projectile: 70 m/s,
-// 0.06 m radius, removed after 1 s or 70 m. A hit deals 9 with no falloff.
+// trigger edge and then one every 0.125 s. A click that is already released
+// still counts: `presses` is how many left-clicks landed since the last
+// sample, and each one attempts a shot when the clock allows. Presses that
+// do not fit before this update ends are dropped, not saved for later, so a
+// burst cannot outrun the hold and cannot dump a backlog into the next frame.
+// Each spike is a projectile: 70 m/s, 0.06 m radius, removed after 1 s or 70 m.
+// A hit deals 9 with no falloff.
 // The magazine is 40. Reserve starts at 40, never exceeds 80, and never goes
 // negative. Reload takes 1.4 s from R or from an empty magazine, and the
 // trigger does nothing while it runs. An empty hold with no reserve left
@@ -55,7 +60,14 @@ export interface FlechetteSlot {
 }
 
 export interface QuillCommand {
+  /** Held at the sample. Full-auto for this whole update. */
   fire: boolean;
+  /**
+   * Left clicks since the previous sample, including a click that is already
+   * up. Omitted keeps the legacy rising edge, which fires even with no time
+   * between pulls. A number, including 0, stays on the 0.125 s clock.
+   */
+  presses?: number;
   /** Rising edge of reload. Held frames after the edge are ignored. */
   reload: boolean;
   origin: Vec3;
@@ -289,12 +301,62 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
         return;
       }
 
-      if (command.fire && !triggerHeld) carry = QUILL_INTERVAL;
+      const rawPresses = command.presses;
+      const paced = typeof rawPresses === "number";
+      const presses = paced ? Math.max(0, Math.floor(rawPresses)) : 0;
+      // Legacy pulls with no `presses` still fire on the rising edge, so a
+      // zero-length click in the old tests spends a round. The game always
+      // passes a count and cannot skip the cooldown that way.
+      if (command.fire && !triggerHeld && !paced) carry = QUILL_INTERVAL;
       triggerHeld = command.fire;
+
+      if (!command.fire && presses > 0) {
+        // The button is up, but one or more clicks landed since the last
+        // sample. Spend as many as this slice can fit. The rest are dropped.
+        let budget = presses;
+        let pending = dt;
+        let elapsed = 0;
+        while (budget > 0 && mag > 0) {
+          const need = QUILL_INTERVAL - carry;
+          // Strictly inside the slice. A pulse that would land on the far
+          // edge belongs to the next sample, and it is not kept as a debt.
+          if (need > 1e-6 && need >= pending - 1e-12) {
+            settle(pending);
+            carry += pending;
+            if (carry > QUILL_INTERVAL) carry = QUILL_INTERVAL;
+            pending = 0;
+            break;
+          }
+          if (need > 1e-6) {
+            settle(need);
+            pending -= need;
+            elapsed += need;
+          }
+          carry = 0;
+          if (!shoot(command, clock + elapsed)) break;
+          budget -= 1;
+          if (budget <= 0 || pending <= 1e-6) break;
+        }
+        if (pending > 1e-8) {
+          if (reloading) reloadTimer += pending;
+          settle(pending);
+          carry += pending;
+          if (carry > QUILL_INTERVAL) carry = QUILL_INTERVAL;
+        }
+        triggerHeld = false;
+        clock += dt;
+        publish();
+        return;
+      }
 
       if (!command.fire) {
         settle(dt);
-        carry = QUILL_INTERVAL;
+        if (paced) {
+          carry += dt;
+          if (carry > QUILL_INTERVAL) carry = QUILL_INTERVAL;
+        } else {
+          carry = QUILL_INTERVAL;
+        }
         clock += dt;
         publish();
         return;

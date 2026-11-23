@@ -39,7 +39,7 @@ Looking and buttons are read from one input state each frame. `down` is held. `p
 | W A S D | `forward` `left` `back` `right` | Walk and strafe in the atrium. |
 | Mouse | `lookX` `lookY` | Yaw and pitch while the pointer is locked. Pitch clamps to ±89°. |
 | Space | `jump` | Jump. |
-| Left mouse | `fire` | VEC-9 Quill Driver. Full-auto while held: one flechette per pulse, eight per second. `down.fire` stays set for the whole hold. `pressed.fire` is only the down edge. |
+| Left mouse | `fire` | VEC-9 Quill Driver. Full-auto while held: one flechette per pulse, eight per second. A click that is already up by the next sample still fires once. Clicks cannot exceed that eight per second, and a burst inside one frame does not queue extra shots. `down.fire` stays set for the whole hold. `pressed.fire` is only the down edge. `firePresses` is how many left clicks landed since the last sample. |
 | R | `reload` | Reload the Quill Driver. An empty magazine reloads on its own when rounds remain. |
 | Esc | `pause` | Pause and release the pointer. Click the pause overlay to resume. |
 | Backquote or F1 | `debug` | Toggle the FPS and position readout. The shell toggle still works while paused. |
@@ -57,7 +57,7 @@ On the ground, forward, back, and strafe share an 8 m/s wish. Acceleration towar
 
 ## VEC-9 Quill Driver
 
-The prototype weapon is a magnetic flechette carbine. Holding the left mouse fires one rail-spike every 0.125 s, with no spread. Each flechette is a projectile: it travels at 70 m/s, is about 0.35 m long with a 0.06 m radius, and despawns after 1 s or 70 m. A hit deals 9 damage with no falloff. The magazine holds 40 and the reserve starts at 40, capped at 80. Reserve never goes negative. Reload takes 1.4 s, from R or automatically when the magazine is empty and rounds remain, and the trigger does nothing during that reload. Pulling the trigger with an empty magazine and an empty reserve does not fire and does not cycle. Each shot adds a 0.12° upward view punch that settles before the next shot if aim is held. The viewmodel, the cyan-magenta muzzle flash, the flechettes, and the tracers are procedural geometry. There is no audio.
+The prototype weapon is a magnetic flechette carbine. Holding the left mouse fires one rail-spike every 0.125 s, with no spread. A click that ends before the next frame still fires one shot when the weapon is ready. Clicking faster than eight a second does not, and clicks during a reload or an empty magazine do not fire once that gate ends. Each flechette is a projectile: it travels at 70 m/s, is about 0.35 m long with a 0.06 m radius, and despawns after 1 s or 70 m. A hit deals 9 damage with no falloff. The magazine holds 40 and the reserve starts at 40, capped at 80. Reserve never goes negative. Reload takes 1.4 s, from R or automatically when the magazine is empty and rounds remain, and the trigger does nothing during that reload. Pulling the trigger with an empty magazine and an empty reserve does not fire and does not cycle. Each shot adds a 0.12° upward view punch that settles before the next shot if aim is held. The viewmodel, the cyan-magenta muzzle flash, the flechettes, and the tracers are procedural geometry. There is no audio.
 
 ## Pickups and damage
 

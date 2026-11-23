@@ -890,7 +890,14 @@ async function assertShellFlow(page, errors) {
           const text = document.querySelector("#fps-readout")?.textContent ?? "";
           const match = /pos (-?\d+\.\d+) (-?\d+\.\d+) (-?\d+\.\d+)/.exec(text);
           if (!match) return false;
-          return startZ - Number(match[3]) > 1;
+          const moved = startZ - Number(match[3]) > 1;
+          // Release in this turn. The well ammo pad is a few meters north, and
+          // a 200 ms frame would otherwise keep W down until the runner
+          // notices and walk the body onto that pad before the fire check.
+          if (moved) {
+            window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true }));
+          }
+          return moved;
         },
         beforeMove.z,
         { timeout: 20_000, polling: 250 },
@@ -1002,6 +1009,7 @@ async function runDevSmoke(browser, errors) {
     if (dev.exitCode == null && !dev.killed) dev.kill("SIGTERM");
   };
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  if (process.env.FRAG_SLOW_FRAMES === "1") await installSlowFrames(page);
   try {
     page.on("console", (message) => {
       const text = message.text();
@@ -1339,17 +1347,31 @@ function installFireProbe(page) {
     };
     window.__fireListenerNames = names;
     window.__fireListenerDetails = details;
+    // Every waiting callback runs when the 200 ms gate opens. Letting only the
+    // first one through starves the page's other animation-frame waits.
     const native = window.requestAnimationFrame.bind(window);
     let last = 0;
-    window.requestAnimationFrame = (callback) =>
-      native((time) => {
-        if (last !== 0 && time - last < 200) {
-          window.requestAnimationFrame(callback);
-          return;
-        }
-        last = time;
-        callback(time);
-      });
+    let scheduled = false;
+    const queue = [];
+    function pump(time) {
+      scheduled = false;
+      if (last !== 0 && time - last < 200) {
+        scheduled = true;
+        native(pump);
+        return;
+      }
+      last = time;
+      const batch = queue.splice(0, queue.length);
+      for (let i = 0; i < batch.length; i += 1) batch[i](time);
+    }
+    window.requestAnimationFrame = (callback) => {
+      queue.push(callback);
+      if (!scheduled) {
+        scheduled = true;
+        native(pump);
+      }
+      return 0;
+    };
   });
 }
 
@@ -1377,15 +1399,27 @@ function installSlowFrames(page) {
   return page.addInitScript(() => {
     const native = window.requestAnimationFrame.bind(window);
     let last = 0;
-    window.requestAnimationFrame = (callback) =>
-      native((time) => {
-        if (last !== 0 && time - last < 200) {
-          window.requestAnimationFrame(callback);
-          return;
-        }
-        last = time;
-        callback(time);
-      });
+    let scheduled = false;
+    const queue = [];
+    function pump(time) {
+      scheduled = false;
+      if (last !== 0 && time - last < 200) {
+        scheduled = true;
+        native(pump);
+        return;
+      }
+      last = time;
+      const batch = queue.splice(0, queue.length);
+      for (let i = 0; i < batch.length; i += 1) batch[i](time);
+    }
+    window.requestAnimationFrame = (callback) => {
+      queue.push(callback);
+      if (!scheduled) {
+        scheduled = true;
+        native(pump);
+      }
+      return 0;
+    };
   });
 }
 
@@ -1562,18 +1596,82 @@ async function assertThrottledFire(browser, errors) {
     if (relocked.mouseDown !== after.mouseDown) {
       errors.push(`fire listeners grew after pointer re-lock (${after.mouseDown} -> ${relocked.mouseDown})`);
     }
-    const burstBefore = relocked;
-    for (let i = 0; i < 8; i += 1) {
-      await page.mouse.down();
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      await page.mouse.up();
-      await new Promise((resolve) => setTimeout(resolve, 70));
+    // The hold stops at whatever the slow sim reached (CI left 4+40). The
+    // burst has to start from a full magazine, or the later clicks land in
+    // the reload and the latch correctly throws them away.
+    await page.waitForFunction(
+      () => {
+        const canvas = document.querySelector("canvas");
+        const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+        return !!sim && sim.reloading === false;
+      },
+      undefined,
+      { timeout: 15_000, polling: 50 },
+    );
+    let armed = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+      return { mag: sim?.mag ?? null, reserve: sim?.reserve ?? null };
+    });
+    if (armed.mag !== 40) {
+      if (!(armed.reserve > 0)) {
+        errors.push(`cannot refill ${armed.mag}+${armed.reserve} before the burst`);
+      } else {
+        await page.keyboard.press("KeyR");
+        await page.waitForFunction(
+          () => {
+            const canvas = document.querySelector("canvas");
+            const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+            return !!sim && sim.reloading === false && sim.mag === 40;
+          },
+          undefined,
+          { timeout: 15_000, polling: 50 },
+        );
+      }
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    const burstAfter = await readFire(page);
-    const burstShots = burstAfter.shots - burstBefore.shots;
-    console.log(`throttled bursts: ${burstShots} shots from 8 clicks, ammo ${burstAfter.ammo}`);
-    if (burstShots > 12) errors.push(`8 clicks fired ${burstShots} shots`);
+    const burstBefore = await readFire(page);
+    const ready = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+      return { mag: sim?.mag ?? null, reserve: sim?.reserve ?? null, reloading: sim?.reloading ?? null };
+    });
+    if (ready.mag !== 40 || ready.reloading) {
+      errors.push(`burst mag is ${ready.mag}+${ready.reserve} (reloading ${ready.reloading}), expected 40`);
+    }
+    // One click per simulated frame. The rAF cap is 200 ms, so the clicks
+    // stay at least 125 ms of sim time apart. A software-GL frame can block
+    // the page for longer than 2 s of wall time, so the deadline is generous
+    // and the condition is the sim clock, not a fixed sleep.
+    const clicks = 8;
+    if (ready.mag === 40 && !ready.reloading) {
+      for (let i = 0; i < clicks; i += 1) {
+        const mark = await page.evaluate(() => {
+          window.dispatchEvent(new MouseEvent("mousedown", { button: 0, buttons: 1, bubbles: true }));
+          window.dispatchEvent(new MouseEvent("mouseup", { button: 0, buttons: 0, bubbles: true }));
+          const canvas = document.querySelector("canvas");
+          const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+          return { frames: sim?.frames ?? -1, sim: sim?.sim ?? -1 };
+        });
+        await page.waitForFunction(
+          (seen) => {
+            const canvas = document.querySelector("canvas");
+            const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+            if (!sim || typeof sim.frames !== "number" || typeof sim.sim !== "number") return false;
+            return sim.frames > seen.frames && sim.sim > seen.sim;
+          },
+          mark,
+          { timeout: 15_000, polling: 50 },
+        );
+      }
+      const burstAfter = await readFire(page);
+      const burstShots = burstAfter.shots - burstBefore.shots;
+      console.log(
+        `throttled bursts: ${burstShots} shots from ${clicks} clicks spaced >=125 ms apart, ammo ${burstBefore.ammo} -> ${burstAfter.ammo}`,
+      );
+      if (burstShots !== clicks) {
+        errors.push(`${clicks} clicks spaced >=125 ms apart fired ${burstShots} shots`);
+      }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`throttled fire probe failed: ${message}`);
@@ -1596,6 +1694,7 @@ try {
   });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    if (process.env.FRAG_SLOW_FRAMES === "1") await installSlowFrames(page);
     page.on("console", (message) => {
       const text = message.text();
       if (message.type() === "error") errors.push(`console: ${text}`);
