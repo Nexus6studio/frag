@@ -3,7 +3,7 @@
 // Esc pauses. Click or Enter resumes. Play does not wait on the lock: a rejected
 // request leaves the sim running, and a later canvas click asks for the lock again.
 // Resuming stays in the session and does not show the warning again.
-// Nothing here is written to localStorage.
+// M is mute. It does not start play. Nothing here is written to localStorage.
 
 type Phase = "warning" | "ready" | "playing" | "paused";
 
@@ -39,7 +39,10 @@ export interface DebugPose {
   grounded: boolean;
 }
 
-export function mountShell(canvas: HTMLCanvasElement): {
+export function mountShell(
+  canvas: HTMLCanvasElement,
+  hooks?: { onGesture?: () => void; onMute?: () => void },
+): {
   readonly phase: Phase;
   /** True while the FPS readout (and the dev target volume) is showing. */
   readonly debug: boolean;
@@ -78,6 +81,7 @@ export function mountShell(canvas: HTMLCanvasElement): {
 
   function acknowledge(): void {
     if (phase !== "warning") return;
+    hooks?.onGesture?.();
     setPhase("ready");
   }
 
@@ -102,6 +106,7 @@ export function mountShell(canvas: HTMLCanvasElement): {
 
   function beginPlay(): void {
     if (phase !== "ready" && phase !== "paused") return;
+    hooks?.onGesture?.();
     setPhase("playing");
     requestLock();
   }
@@ -119,6 +124,13 @@ export function mountShell(canvas: HTMLCanvasElement): {
 
   function onKeyDown(event: KeyboardEvent): void {
     if (event.repeat) return;
+
+    if (event.code === "KeyM") {
+      event.preventDefault();
+      event.stopPropagation();
+      hooks?.onMute?.();
+      return;
+    }
 
     if (event.code === "F1" || event.code === "Backquote") {
       event.preventDefault();

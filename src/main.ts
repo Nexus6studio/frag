@@ -14,7 +14,9 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
+import { ATRIUM_PADS, ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
+import { createAudio } from "./audio.ts";
+import { cueFor, hurtFromVitals, type SimEvent } from "./cues.ts";
 import { restartCombat } from "./combat.ts";
 import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium, syncPadViews } from "./floor.ts";
 import { createFight } from "./fight.ts";
@@ -42,10 +44,16 @@ import { exposeRunDebug } from "./wisp.ts";
 import { mountWispView } from "./wisp-view.ts";
 import { mountEnforcerView } from "./enforcer-view.ts";
 
+function harnessFlag(name: "__fragKeepDrawingBuffer"): boolean {
+  const host = globalThis as unknown as Record<string, unknown>;
+  return host[name] === true;
+}
+
 const renderer = new WebGLRenderer({
   antialias: true,
-  // The headless smoke test reads pixels after the browser composites.
-  preserveDrawingBuffer: true,
+  // Keeping the drawing buffer makes Chrome read every frame back to composite
+  // it ("GPU stall due to ReadPixels"). The smoke probe opts in before boot.
+  preserveDrawingBuffer: harnessFlag("__fragKeepDrawingBuffer"),
 });
 renderer.outputColorSpace = SRGBColorSpace;
 renderer.toneMapping = NoToneMapping;
@@ -55,7 +63,23 @@ renderer.info.autoReset = false;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
-const shell = mountShell(renderer.domElement);
+const audio = createAudio();
+let showMute = (muted: boolean): void => {
+  muteShown = muted;
+};
+let muteShown = false;
+const hear = (event: SimEvent): void => {
+  audio.play(cueFor(event));
+};
+const shell = mountShell(renderer.domElement, {
+  onGesture() {
+    audio.prime();
+  },
+  onMute() {
+    audio.prime();
+    showMute(audio.toggleMute());
+  },
+});
 let onPointerDown = (): void => {};
 let onPointerUp = (): void => {};
 const input = createInput(renderer.domElement, {
@@ -68,6 +92,13 @@ const benchHp = (window as Window & { __fragBenchHp?: unknown }).__fragBenchHp;
 const player = createPlayerState(
   typeof benchHp === "number" && Number.isFinite(benchHp) && benchHp > 0 ? { hp: benchHp } : undefined,
 );
+let heardHp = player.get().hp;
+player.subscribe((state) => {
+  if (hurtFromVitals(heardHp, state.hp)) hear({ type: "player-hurt" });
+  heardHp = state.hp;
+  audio.setHp(state.hp);
+});
+audio.setHp(heardHp);
 
 const hull = createAtriumHull();
 let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
@@ -87,8 +118,8 @@ camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z)
 camera.rotation.order = "YXZ";
 camera.lookAt(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z - 1);
 const look = createLook(camera);
-const quill = createQuill({ hull, player });
-const pickups = createPickupSim(quill);
+const quill = createQuill({ hull, player, onEvent: hear });
+const pickups = createPickupSim(quill, ATRIUM_PADS, hear);
 const debugTarget = import.meta.env.DEV
   ? {
       center: {
@@ -100,7 +131,7 @@ const debugTarget = import.meta.env.DEV
     }
   : null;
 const quillView = mountQuillView(scene, camera, quill, debugTarget);
-const fight = createFight({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN });
+const fight = createFight({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN, onEvent: hear });
 const wisps = fight.wisps;
 const enforcers = fight.enforcers;
 const wispView = mountWispView(scene, wisps, camera);
@@ -108,6 +139,8 @@ const enforcerView = mountEnforcerView(scene, enforcers);
 
 function restartRun(): void {
   // The click that leaves the recap is not a shot on the next frame.
+  audio.prime();
+  audio.cut();
   input.discard();
   restartCombat({
     player,
@@ -131,6 +164,8 @@ const hud = mountHud(player, {
     onPointerUp = up;
   },
 });
+showMute = (muted) => hud.setMuted(muted);
+if (muteShown) hud.setMuted(true);
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
 const quillCommand = { fire: false, presses: 0, reload: false, origin: muzzle, direction: aim };
@@ -362,6 +397,7 @@ function frame(time: number): void {
     renderer.info.reset();
     composer.render(simDt);
   }
+  audio.tick();
   requestAnimationFrame(frame);
 }
 

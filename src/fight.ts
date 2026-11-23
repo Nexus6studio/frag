@@ -1,6 +1,7 @@
 // One wave clock for drones and enforcers. The gap starts only when both
 // pools are empty, and the next spawn refills both from that same plan.
 
+import type { CueListener } from "./cues.ts";
 import type { Hull, Vec3 } from "./move.ts";
 import type { HitboxWorld } from "./hitbox.ts";
 import type { PlayerStore } from "./player/state.ts";
@@ -29,6 +30,7 @@ export function createFight(options: {
   hitboxes: HitboxWorld;
   origin?: Vec3;
   enforcersEnabled?: boolean;
+  onEvent?: CueListener;
 }): Fight {
   const director = createWaveDirector({ enforcersEnabled: options.enforcersEnabled });
   let poke = (): void => {};
@@ -38,6 +40,7 @@ export function createFight(options: {
     hitboxes: options.hitboxes,
     director,
     onCleared: () => poke(),
+    onEvent: options.onEvent,
   });
   const wisps = createWispSim({
     hull: options.hull,
@@ -47,6 +50,7 @@ export function createFight(options: {
     director,
     alliesAlive: () => enforcers.aliveCount(),
     onWaveSpawn: (plan, feet) => enforcers.spawnCount(plan.enforcers, feet),
+    onEvent: options.onEvent,
   });
   poke = () => wisps.notifyAllies();
 

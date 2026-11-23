@@ -34,6 +34,7 @@ import {
   type MoveState,
   type Vec3,
 } from "./move.ts";
+import type { CueListener } from "./cues.ts";
 import { createBloodGore, type GoreDecal, type GorePart } from "./gore.ts";
 import { applyDamage } from "./pickups.ts";
 import { damagePlayer } from "./player/hurt.ts";
@@ -146,6 +147,8 @@ export interface EnforcerOptions {
   onCleared?: () => void;
   /** Override the 2 s spawn grace. Tests that measure the gun pass 0. */
   grace?: number;
+  /** Shots, hits, and kills. The view plays these. The sim does not. */
+  onEvent?: CueListener;
 }
 
 interface Unit extends EnforcerUnit {
@@ -236,6 +239,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     unit.armor = next.armor;
     rememberHurt(unit, amount, time);
     if (unit.hp > 0) {
+      options.onEvent?.({ type: "enemy-hit" });
       if (hurtSum(unit, time) >= ENFORCER_HURT_TRIGGER && unit.sidestep <= 0) {
         unit.sidestep = ENFORCER_SIDESTEP;
         unit.side = coverSign(unit, hull);
@@ -247,6 +251,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     unit.down = 0;
     unit.sidestep = 0;
     unit.handle.setActive(false);
+    options.onEvent?.({ type: "enemy-kill" });
     burst(unit.position);
     gore.burst(unit.position, hull);
     director?.noteFrag();
@@ -347,6 +352,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     if (!changed) return false;
     if (shots < SHOT_RECORD) shotTimes[shots] = time;
     shots += 1;
+    options.onEvent?.({ type: "enforcer-shot" });
     hits += 1;
     if (time < firstShot) firstShot = time;
     emitFlash(mx, my, mz, tx * inv, ty * inv, tz * inv, dist);

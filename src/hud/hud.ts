@@ -11,7 +11,7 @@ export function mountHud(
     /** One window mousedown already exists for fire. Death tracking uses that. */
     trackPointer?: (down: () => void, up: () => void) => void;
   },
-): { setWave(wave: number): void } {
+): { setWave(wave: number): void; setMuted(muted: boolean): void } {
   const root = document.createElement("div");
   root.id = "hud";
   root.dataset.mode = "hidden";
@@ -48,7 +48,12 @@ export function mountHud(
   death.hidden = true;
   death.textContent = deathRecapText({ wavesCleared: 0, frags: 0, timeAlive: 0 });
 
-  root.append(crosshair, waveEl, bar, death);
+  const mute = document.createElement("p");
+  mute.id = "hud-mute";
+  mute.hidden = true;
+  mute.textContent = "MUTE";
+
+  root.append(crosshair, waveEl, bar, mute, death);
 
   const els: HudElements = {
     root,
@@ -164,6 +169,9 @@ export function mountHud(
       const n = Math.max(1, Math.floor(Number.isFinite(wave) ? wave : 1));
       const text = `WAVE ${n}`;
       if (waveEl.textContent !== text) waveEl.textContent = text;
+    },
+    setMuted(muted: boolean): void {
+      mute.hidden = !muted;
     },
   };
 }

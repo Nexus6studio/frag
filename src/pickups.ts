@@ -14,6 +14,7 @@
 // death. The player and the UNIT-7 enforcer both call this rule.
 
 import { ATRIUM_PADS, type AtriumPad, type PadKind } from "./atrium.ts";
+import type { CueListener } from "./cues.ts";
 import { CAPSULE_HEIGHT, CAPSULE_RADIUS, type Vec3 } from "./move.ts";
 import type { PlayerStore } from "./player/state.ts";
 
@@ -165,7 +166,11 @@ export function padTrigger(pad: PickupPad): { min: Vec3; max: Vec3 } {
   };
 }
 
-export function createPickupSim(bank: ReserveBank | null = null, source: readonly AtriumPad[] = ATRIUM_PADS): PickupSim {
+export function createPickupSim(
+  bank: ReserveBank | null = null,
+  source: readonly AtriumPad[] = ATRIUM_PADS,
+  onEvent?: CueListener,
+): PickupSim {
   const pads: PickupPad[] = [];
   for (const pad of source) {
     if (pad.kind === "armor" && !ARMOR_ENABLED) continue;
@@ -205,6 +210,7 @@ export function createPickupSim(bank: ReserveBank | null = null, source: readonl
           hp = granted.hp;
           hpDirty = true;
           pad.cooldown = HEALTH_RESPAWN_SECONDS;
+          onEvent?.({ type: "pickup", kind: "health" });
           continue;
         }
         if (pad.kind === "armor") {
@@ -213,11 +219,13 @@ export function createPickupSim(bank: ReserveBank | null = null, source: readonl
           armor = granted.armor;
           armorDirty = true;
           pad.cooldown = ARMOR_RESPAWN_SECONDS;
+          onEvent?.({ type: "pickup", kind: "armor" });
           continue;
         }
         const gained = giveReserve(player, bank, AMMO_PICKUP);
         if (gained <= 0) continue;
         pad.cooldown = AMMO_RESPAWN_SECONDS;
+        onEvent?.({ type: "pickup", kind: "ammo" });
       }
       if (hpDirty || armorDirty) {
         const patch: { hp?: number; armor?: number } = {};
