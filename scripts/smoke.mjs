@@ -706,18 +706,28 @@ async function assertQuillFire(page, errors) {
   const mag = Number(mid.split("+")[0]);
   if (!(mag < 40)) errors.push(`ammo digits did not drop from 40 (now ${mid})`);
   await page.keyboard.press("KeyR");
-  try {
-    await page.waitForFunction(
-      (previous) => {
+  const refilled = (previous) =>
+    page.waitForFunction(
+      (prior) => {
         const text = document.querySelector("#hud-ammo")?.textContent ?? "";
-        return text.startsWith("40+") && text !== previous;
+        return text.startsWith("40+") && text !== prior;
       },
-      mid,
+      previous,
       { timeout: 15_000, polling: 50 },
     );
+  try {
+    await refilled(mid);
   } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`reload did not refill the magazine (now ${await ammoText()}): ${message}`);
+    // A lost pointer lock pauses the sim, so the first R never starts the reload.
+    await page.keyboard.press("KeyR");
+    try {
+      await refilled(mid);
+    } catch (retryError) {
+      const message = retryError instanceof Error ? retryError.message.split("\n")[0] : String(retryError);
+      const text = await page.evaluate(() => document.querySelector("#hud-ammo")?.textContent ?? "");
+      const phase = await page.evaluate(() => document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "");
+      errors.push(`reload did not refill the magazine (now ${text}, phase ${phase}): ${message}`);
+    }
   }
   const drones = await readDrones(page);
   if (drones.error) errors.push(drones.error);
