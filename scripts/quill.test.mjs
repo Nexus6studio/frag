@@ -141,6 +141,39 @@ test("full-auto rate stays 8 per second at 20 fps and 144 fps", () => {
   }
 });
 
+test("40 rounds take about 5 s at 5, 30, and 120 fps, then each mag reloads from reserve", () => {
+  for (const fps of [5, 30, 120]) {
+    const dt = 1 / fps;
+    const quill = fresh();
+    let t = 0;
+    while (quill.mag > 0 && t < 8) {
+      quill.update(dt, command(true, false));
+      t += dt;
+    }
+    const span = quill.shotTime(39) - quill.shotTime(0);
+    const rate = 39 / span;
+    console.log(
+      `quill ${fps} fps: empty at ${t.toFixed(3)} s, interval ${(span / 39).toFixed(5)} s, ${rate.toFixed(3)} shots/s`,
+    );
+    assert.equal(quill.shotsFired, 40);
+    assert.equal(quill.mag, 0);
+    assert.equal(quill.reserve, 40);
+    assert.equal(quill.reloading, true);
+    assert.ok(Math.abs(rate - 8) <= 0.05, `${fps} fps rate ${rate}`);
+    assert.ok(Math.abs(t - 5) <= 0.15, `${fps} fps magazine lasted ${t}`);
+    const marked = t;
+    while (quill.reloading && t - marked < 3) {
+      quill.update(dt, command(true, false));
+      t += dt;
+    }
+    const reload = t - marked;
+    console.log(`quill ${fps} fps reload ${reload.toFixed(3)} s -> ${quill.mag}+${quill.reserve}`);
+    assert.ok(Math.abs(reload - QUILL_RELOAD) <= dt + 0.02, `${fps} fps reload ${reload}`);
+    assert.equal(quill.mag, 40);
+    assert.equal(quill.reserve, 0);
+  }
+});
+
 test("reload takes 1.4 s, refills from reserve, blocks fire, and reserve cannot go negative", () => {
   const quill = fresh();
   for (let i = 0; i < 10; i += 1) {

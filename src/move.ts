@@ -37,11 +37,22 @@ export const LANDING_GRACE = 0.08;
 
 export const SIM_HZ = 120;
 export const SIM_DT = 1 / SIM_HZ;
+/** Near clip. The eye must stay at least this far from hull surfaces. */
+export const CAMERA_NEAR = 0.08;
 /**
- * Frames longer than this are dropped instead of simulated. A tab switch can
- * stall for seconds; a 20 fps frame (50 ms) must still run in real time.
+ * A frame shorter than this is simulated in full, down to 20 fps. Anything
+ * longer is clamped. A hidden tab does not use this catch-up: that gap is
+ * dropped so the resume frame does not step the sim.
  */
 export const MAX_FRAME_SECONDS = 0.25;
+
+/** Seconds to simulate for one animation timestamp. `drop` skips the gap. */
+export function clampedFrameSeconds(previousMs: number, nowMs: number, drop: boolean): number {
+  if (drop || !(previousMs > 0) || !Number.isFinite(previousMs) || !Number.isFinite(nowMs)) return 0;
+  const raw = (nowMs - previousMs) / 1000;
+  if (!(raw > 0)) return 0;
+  return raw > MAX_FRAME_SECONDS ? MAX_FRAME_SECONDS : raw;
+}
 
 /** Below this, braking snaps to rest. High enough to finish a stop, low enough that a wall clip does not stick. */
 const REST_SPEED = 0.45;
@@ -445,6 +456,55 @@ function boxPush(x: number, z: number, box: BoxSolid, padding = 0): WallPush | n
   return { depth: reach - dist, nx: dx / dist, nz: dz / dist, ny: 0 };
 }
 
+/**
+ * A walkable ramp is a floor from above and a ceiling from below. The eye sits
+ * 0.15 m under the top of the capsule. Push the body downslope until the eye
+ * is at least a near-plane away from the underside, or the camera clips into
+ * the ramp mesh.
+ */
+function rampCeilingPush(x: number, feetY: number, z: number, ramp: RampSolid): WallPush | null {
+  const plane = rampPlane(ramp);
+  if (!isWalkableNormal(plane.normal.y)) return null;
+  if (x < ramp.minX - 0.02 || x > ramp.maxX + 0.02) return null;
+  if (z < ramp.minZ - 0.02 || z > ramp.maxZ + 0.02) return null;
+  const feetOn = restFeetY(x, z, plane);
+  if (feetY + 0.12 >= feetOn) return null;
+  const eyeY = feetY + EYE_HEIGHT;
+  const dist = plane.normal.y * eyeY + plane.normal.z * z - plane.d;
+  const needed = CAMERA_NEAR + 0.04;
+  if (dist >= needed) return null;
+  const nz = plane.normal.z;
+  if (Math.abs(nz) < 0.05) return null;
+  const sign = nz >= 0 ? 1 : -1;
+  return { depth: (needed - dist) / Math.abs(nz), nx: 0, ny: 0, nz: sign };
+}
+
+export function eyeSurfaceClearance(feet: Vec3, hull: Hull): number {
+  const eyeY = feet.y + EYE_HEIGHT;
+  let nearest = Infinity;
+  for (const box of hull.boxes) {
+    const cx = clamp(feet.x, box.min.x, box.max.x);
+    const cy = clamp(eyeY, box.min.y, box.max.y);
+    const cz = clamp(feet.z, box.min.z, box.max.z);
+    const dx = feet.x - cx;
+    const dy = eyeY - cy;
+    const dz = feet.z - cz;
+    const dist = Math.hypot(dx, dy, dz);
+    const inside = dx === 0 && dy === 0 && dz === 0;
+    const gap = inside
+      ? -Math.min(feet.x - box.min.x, box.max.x - feet.x, eyeY - box.min.y, box.max.y - eyeY, feet.z - box.min.z, box.max.z - feet.z)
+      : dist;
+    if (gap < nearest) nearest = gap;
+  }
+  for (const ramp of hull.ramps) {
+    if (feet.x < ramp.minX || feet.x > ramp.maxX || feet.z < ramp.minZ || feet.z > ramp.maxZ) continue;
+    const plane = rampPlane(ramp);
+    const dist = plane.normal.y * eyeY + plane.normal.z * feet.z - plane.d;
+    if (dist < nearest) nearest = dist;
+  }
+  return nearest;
+}
+
 function steepRampPush(
   x: number,
   y: number,
@@ -498,6 +558,7 @@ function deepestWall(
   }
   for (const ramp of hull.ramps) {
     hit = considerWall(hit, steepRampPush(x, y, z, ramp, padding));
+    hit = considerWall(hit, rampCeilingPush(x, feetY, z, ramp));
   }
   return hit;
 }
@@ -514,6 +575,8 @@ function wallNormals(pos: Vec3, feetY: number, hull: Hull, canStep: boolean, pad
   for (const ramp of hull.ramps) {
     const push = steepRampPush(pos.x, feetY, pos.z, ramp, padding);
     if (push && push.depth > 1e-5) normals.push({ x: push.nx, y: push.ny, z: push.nz });
+    const ceiling = rampCeilingPush(pos.x, feetY, pos.z, ramp);
+    if (ceiling && ceiling.depth > 1e-5) normals.push({ x: ceiling.nx, y: ceiling.ny, z: ceiling.nz });
   }
   return normals;
 }

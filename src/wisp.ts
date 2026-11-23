@@ -16,7 +16,7 @@
 // Death is sparks, small metal and plastic scraps, and dark hydraulic fluid.
 // Those particles, and the bolts, are fixed pools.
 
-import { CEILING_Y, MAP_HALF, PARAPET_Y } from "./atrium.ts";
+import { CEILING_Y, KILL_Y, MAP_HALF, PARAPET_Y } from "./atrium.ts";
 import type { HitboxHandle, HitboxWorld } from "./hitbox.ts";
 import { playerHitboxes } from "./hitbox.ts";
 import { CAPSULE_HEIGHT, CAPSULE_RADIUS, EYE_HEIGHT, type BoxSolid, type Hull, type RampSolid, type Vec3 } from "./move.ts";
@@ -71,7 +71,10 @@ const RECORD = 24;
 const SLOP = 0.02;
 const VOLUME_PAD = 0.02;
 
-export type WispPhase = "telegraph" | "intra" | "recover";
+export type WispPhase = "grace" | "telegraph" | "intra" | "recover";
+
+/** Drones do not fire for this long after a spawn, a restart, or a new wave. */
+export const WISP_SPAWN_GRACE = 2;
 
 export interface WispDrone {
   readonly index: number;
@@ -363,6 +366,16 @@ export function createWispSim(options: WispOptions): WispSim {
 
   function finishPhase(drone: Drone, at: number): void {
     if (!drone.alive) return;
+    if (drone.phase === "grace") {
+      // The lead starts the telegraph. The others wait out a recover first,
+      // so the two guns do not fire on the same tick.
+      if (drone.index === 0) beginTelegraph(drone, at);
+      else {
+        drone.phase = "recover";
+        drone.timer = 0;
+      }
+      return;
+    }
     if (drone.phase === "telegraph") {
       launch(drone, at);
       drone.phase = "intra";
@@ -548,13 +561,11 @@ export function createWispSim(options: WispOptions): WispSim {
       drone.position.z = point.z;
       drone.alive = true;
       drone.hp = WISP_HP;
-      drone.phase = "recover";
+      drone.phase = "grace";
       drone.timer = 0;
       drone.handle.setActive(true);
       faceOrigin(drone, feet);
     }
-    const lead = drones[0];
-    if (lead?.alive) beginTelegraph(lead, time);
     director.acknowledgeSpawn();
   }
 
@@ -831,6 +842,7 @@ function makePool(count: number): WispParticle[] {
 }
 
 function phaseDuration(phase: WispPhase): number {
+  if (phase === "grace") return WISP_SPAWN_GRACE;
   if (phase === "telegraph") return WISP_TELEGRAPH;
   if (phase === "intra") return WISP_BOLT_GAP;
   return WISP_RECOVER;
@@ -883,7 +895,17 @@ function stepPool(pool: WispParticle[], dt: number, gravity: number): void {
     slot.y += slot.vy * dt;
     slot.z += slot.vz * dt;
     slot.age += dt;
-    if (slot.age >= slot.life) slot.alive = false;
+    // The kill plane and the outer walls retire scraps that leave the atrium.
+    // Otherwise a falling droplet stays alive below the map until its timer.
+    if (
+      slot.age >= slot.life ||
+      slot.y < KILL_Y ||
+      slot.y > CEILING_Y ||
+      Math.abs(slot.x) > MAP_HALF ||
+      Math.abs(slot.z) > MAP_HALF
+    ) {
+      slot.alive = false;
+    }
   }
 }
 

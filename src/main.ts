@@ -22,8 +22,9 @@ import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
 import { createLook } from "./look";
 import {
+  CAMERA_NEAR,
   EYE_HEIGHT,
-  MAX_FRAME_SECONDS,
+  clampedFrameSeconds,
   createMoveState,
   createMover,
   exposeMoveDebug,
@@ -52,7 +53,12 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 const shell = mountShell(renderer.domElement);
-const input = createInput(renderer.domElement);
+let onPointerDown = (): void => {};
+let onPointerUp = (): void => {};
+const input = createInput(renderer.domElement, {
+  onPointerDown: () => onPointerDown(),
+  onPointerUp: () => onPointerUp(),
+});
 const player = createPlayerState();
 
 const hull = createAtriumHull();
@@ -68,7 +74,7 @@ sheen.position.set(-6, 14, 8);
 sheen.castShadow = false;
 scene.add(sheen);
 
-const camera = new PerspectiveCamera(50, 1, 0.08, 80);
+const camera = new PerspectiveCamera(50, 1, CAMERA_NEAR, 80);
 camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z);
 camera.rotation.order = "YXZ";
 camera.lookAt(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z - 1);
@@ -87,7 +93,7 @@ const debugTarget = import.meta.env.DEV
   : null;
 const quillView = mountQuillView(scene, camera, quill, debugTarget);
 const wisps = createWispSim({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN });
-const wispView = mountWispView(scene, wisps);
+const wispView = mountWispView(scene, wisps, camera);
 
 function restartRun(): void {
   restartCombat({
@@ -102,9 +108,13 @@ function restartRun(): void {
   shell.holdLock();
 }
 
-mountHud(player, {
+const hud = mountHud(player, {
   onRestart: restartRun,
   getRecap: () => wisps.recap(),
+  trackPointer(down, up) {
+    onPointerDown = down;
+    onPointerUp = up;
+  },
 });
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
@@ -127,11 +137,14 @@ Object.defineProperty(renderer.domElement, "fragStats", {
   enumerable: false,
   get() {
     const render = renderer.info.render;
+    const memory = renderer.info.memory;
     return {
       calls: render.calls,
       triangles: render.triangles,
       lines: render.lines,
       points: render.points,
+      geometries: memory.geometries,
+      textures: memory.textures,
     };
   },
 });
@@ -164,14 +177,95 @@ function resize(): void {
 window.addEventListener("resize", resize);
 resize();
 
+const contextLostPanel = document.querySelector<HTMLElement>("#context-lost");
+let contextLost = false;
+
+function showContextLost(): void {
+  contextLost = true;
+  if (contextLostPanel) contextLostPanel.hidden = false;
+}
+
+function hideContextLost(): void {
+  contextLost = false;
+  if (contextLostPanel) contextLostPanel.hidden = true;
+}
+
+renderer.domElement.addEventListener("webglcontextlost", (event) => {
+  event.preventDefault();
+  // The panel is queried again so a loss still has a message if the first lookup missed.
+  const panel = contextLostPanel ?? document.querySelector<HTMLElement>("#context-lost");
+  contextLost = true;
+  if (panel) panel.hidden = false;
+});
+
+renderer.domElement.addEventListener("webglcontextrestored", () => {
+  try {
+    resize();
+    hideContextLost();
+  } catch {
+    showContextLost();
+  }
+});
+
+document.querySelector("#context-lost-reload")?.addEventListener("click", () => {
+  window.location.reload();
+});
+
 let lastTime = 0;
+let lastSimDt = 0;
+let simSeconds = 0;
+let simFrames = 0;
+let dropClock = false;
+
+document.addEventListener("visibilitychange", () => {
+  // The resume frame would otherwise clamp a multi-second gap to 250 ms.
+  dropClock = true;
+});
+
+Object.defineProperty(renderer.domElement, "fragSim", {
+  configurable: true,
+  enumerable: false,
+  get() {
+    return {
+      sim: simSeconds,
+      frames: simFrames,
+      frameDt: lastSimDt,
+      shots: quill.shotsFired,
+      firstShot: quill.shotsFired > 0 ? quill.shotTime(0) : null,
+      lastShot: quill.shotsFired > 0 ? quill.shotTime(quill.shotsFired - 1) : null,
+      mag: quill.mag,
+      reserve: quill.reserve,
+      reloading: quill.reloading,
+    };
+  },
+});
+Object.defineProperty(renderer.domElement, "fragPose", {
+  configurable: true,
+  enumerable: false,
+  get() {
+    const body = mover.state;
+    return {
+      x: body.position.x,
+      y: body.position.y,
+      z: body.position.z,
+      vx: body.velocity.x,
+      vy: body.velocity.y,
+      vz: body.velocity.z,
+      simDt: lastSimDt,
+    };
+  },
+});
 
 function frame(time: number): void {
-  // The mover clamps a stall at 250 ms and keeps the sub-step remainder.
-  // The Quill Driver sees that same clamped slice, not the raw stall.
-  const frameDt = lastTime === 0 ? 0 : Math.max(0, (time - lastTime) / 1000);
+  // A hidden tab drops the gap. Any other stall is clamped at 250 ms.
+  // The mover, the Quill Driver, and the drones share that slice.
+  const drop = dropClock || document.visibilityState === "hidden";
+  dropClock = false;
+  lastSimDt = clampedFrameSeconds(lastTime, time, drop);
   lastTime = time;
-  const simDt = Math.min(frameDt, MAX_FRAME_SECONDS);
+  const simDt = lastSimDt;
+  simSeconds += simDt;
+  simFrames += 1;
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
   const controls = input.sample(captured);
@@ -198,6 +292,7 @@ function frame(time: number): void {
     quill.update(simDt, quillCommand);
     wisps.update(simDt, body.position);
   }
+  hud.setWave(wisps.wave);
   look.setViewPunch(quill.punchDeg);
   quillView.setDebugVisible(shell.debug);
   quillView.sync();
@@ -212,8 +307,10 @@ function frame(time: number): void {
     planarSpeed: planarSpeedOf(body.velocity),
     grounded: body.grounded,
   });
-  renderer.info.reset();
-  composer.render();
+  if (!contextLost) {
+    renderer.info.reset();
+    composer.render(simDt);
+  }
   requestAnimationFrame(frame);
 }
 

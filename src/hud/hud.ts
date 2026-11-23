@@ -1,12 +1,17 @@
 import "./hud.css";
 import type { PlayerStore } from "../player/state";
 import type { DeathRecap } from "../waves.ts";
-import { bindHud, deathRecapText, type HudElements } from "./model";
+import { acceptRestartClick, bindHud, deathRecapText, recapAcceptsInput, type HudElements } from "./model";
 
 export function mountHud(
   player: PlayerStore,
-  hooks?: { onRestart?: () => void; getRecap?: () => DeathRecap },
-): void {
+  hooks?: {
+    onRestart?: () => void;
+    getRecap?: () => DeathRecap;
+    /** One window mousedown already exists for fire. Death tracking uses that. */
+    trackPointer?: (down: () => void, up: () => void) => void;
+  },
+): { setWave(wave: number): void } {
   const root = document.createElement("div");
   root.id = "hud";
   root.dataset.mode = "hidden";
@@ -25,7 +30,16 @@ export function mountHud(
   const hpStat = stat("hud-hp-stat", "HP", "hud-hp");
   const armorStat = stat("hud-armor-stat", "Armor", "hud-armor");
   const ammoStat = stat("hud-ammo-stat", "Ammo", "hud-ammo");
+  const cue = document.createElement("span");
+  cue.id = "hud-ammo-cue";
+  cue.className = "hud-cue";
+  cue.hidden = true;
+  ammoStat.root.append(cue);
   bar.append(hpStat.root, armorStat.root, ammoStat.root);
+
+  const waveEl = document.createElement("p");
+  waveEl.id = "hud-wave";
+  waveEl.textContent = "WAVE 1";
 
   const death = document.createElement("button");
   death.type = "button";
@@ -34,7 +48,7 @@ export function mountHud(
   death.hidden = true;
   death.textContent = deathRecapText({ wavesCleared: 0, frags: 0, timeAlive: 0 });
 
-  root.append(crosshair, bar, death);
+  root.append(crosshair, waveEl, bar, death);
 
   const els: HudElements = {
     root,
@@ -43,6 +57,7 @@ export function mountHud(
     ammo: ammoStat.value,
     armorStat: armorStat.root,
     death,
+    cue,
   };
 
   const shell = document.querySelector<HTMLElement>("#app-shell");
@@ -64,19 +79,93 @@ export function mountHud(
   if (shell) observer.observe(shell, { attributes: true, attributeFilter: ["data-phase"] });
 
   document.addEventListener("pointerlockchange", syncCursor);
+  // A blur can deliver the visibility event and a click in the same turn, before
+  // the pause observer hides the recap. That click is not a restart.
+  let blurred = false;
+  document.addEventListener("visibilitychange", () => {
+    blurred = true;
+    window.setTimeout(() => {
+      blurred = false;
+    }, 0);
+  });
+  let deathAt = 0;
+  let heldThroughDeath = false;
+  let pointerDown = false;
+  player.subscribe(() => {
+    const dead = player.get().hp <= 0;
+    if (dead && deathAt === 0) {
+      deathAt = performance.now();
+      heldThroughDeath = pointerDown;
+    }
+    if (!dead) {
+      deathAt = 0;
+      heldThroughDeath = false;
+    }
+  });
+
+  const armed = (): boolean => deathAt !== 0 && recapAcceptsInput((performance.now() - deathAt) / 1000);
+
+  const restartFromRecap = (event: Event): void => {
+    const phase = shell?.getAttribute("data-phase") ?? null;
+    if (
+      !acceptRestartClick({
+        mode: root.dataset.mode ?? null,
+        phase,
+        hidden: document.hidden || blurred,
+      })
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (hooks?.onRestart) hooks.onRestart();
+    else player.restart();
+  };
+
+  hooks?.trackPointer?.(
+    () => {
+      pointerDown = true;
+      if (armed()) heldThroughDeath = false;
+    },
+    () => {
+      pointerDown = false;
+    },
+  );
   window.addEventListener(
     "click",
     (event) => {
+      if (root.dataset.mode === "dead" && (!armed() || heldThroughDeath)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      restartFromRecap(event);
+    },
+    true,
+  );
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.code !== "Enter" || event.repeat) return;
       if (root.dataset.mode !== "dead") return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (hooks?.onRestart) hooks.onRestart();
-      else player.restart();
+      if (!armed()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      restartFromRecap(event);
     },
     true,
   );
 
   document.body.appendChild(root);
+  return {
+    setWave(wave: number): void {
+      const n = Math.max(1, Math.floor(Number.isFinite(wave) ? wave : 1));
+      const text = `WAVE ${n}`;
+      if (waveEl.textContent !== text) waveEl.textContent = text;
+    },
+  };
 }
 
 function stat(

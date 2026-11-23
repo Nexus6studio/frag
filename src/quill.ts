@@ -13,6 +13,7 @@
 // oldest slot is reused. The 0.12° pitch punch is a view offset: it settles
 // in 0.10 s, before the next pulse, and it does not bend the bore line.
 
+import { CEILING_Y, KILL_Y, MAP_HALF } from "./atrium.ts";
 import { playerHitboxes, type HitboxSweep, type HitboxWorld } from "./hitbox.ts";
 import type { Hull, Vec3 } from "./move.ts";
 import type { PlayerStore } from "./player/state.ts";
@@ -446,7 +447,14 @@ function stepSlot(slot: FlechetteSlot, dt: number): void {
   slot.age += used / QUILL_SPEED;
 
   if (hit) hit(QUILL_DAMAGE);
-  if (hit || blocked || slot.age >= QUILL_LIFETIME - 1e-8 || slot.traveled >= QUILL_RANGE - 1e-4) {
+  // Open sky is not a hull. A spike that leaves the atrium is spent.
+  const outside =
+    driverHull !== null &&
+    (Math.abs(slot.x) > MAP_HALF ||
+      Math.abs(slot.z) > MAP_HALF ||
+      slot.y < KILL_Y ||
+      slot.y > CEILING_Y);
+  if (hit || blocked || outside || slot.age >= QUILL_LIFETIME - 1e-8 || slot.traveled >= QUILL_RANGE - 1e-4) {
     slot.alive = false;
   }
 }

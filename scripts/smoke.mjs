@@ -102,6 +102,10 @@ async function visibleText(page, selector) {
   return page.locator(selector).innerText();
 }
 
+const WARNING_TITLE = "Content warning";
+const WARNING_BODY =
+  "Contains fast-paced combat against robotic enemies, with explosions, sparks and debris. Includes flashing lights and rapid motion.";
+
 function horizontalFov(verticalDeg, aspect) {
   const vertical = (verticalDeg * Math.PI) / 180;
   return (2 * Math.atan(Math.tan(vertical / 2) * aspect) * 180) / Math.PI;
@@ -191,38 +195,309 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+async function assertWarningCopy(page, errors, label) {
+  const measured = await page.evaluate(() => {
+    const title = document.querySelector("#content-warning-title");
+    const body = document.querySelector("#content-warning .copy");
+    const panel = document.querySelector("#content-warning .panel");
+    const button = document.querySelector("#content-warning-continue");
+    const px = (el) => (el instanceof HTMLElement ? Number.parseFloat(getComputedStyle(el).fontSize) : null);
+    const style = (el) => (el instanceof HTMLElement ? getComputedStyle(el) : null);
+    return {
+      title: title?.textContent ?? "",
+      body: body?.textContent ?? "",
+      button: button?.textContent ?? "",
+      eyebrow: document.querySelector("#content-warning .eyebrow") !== null,
+      titlePx: px(title),
+      bodyPx: px(body),
+      titleColor: style(title)?.color ?? "",
+      bodyColor: style(body)?.color ?? "",
+      panel: style(panel)?.backgroundColor ?? "",
+      height: window.innerHeight,
+      width: window.innerWidth,
+    };
+  });
+  if (measured.title !== WARNING_TITLE) {
+    errors.push(`${label}: warning title is ${JSON.stringify(measured.title)}`);
+  }
+  if (measured.body.trim() !== WARNING_BODY) {
+    errors.push(`${label}: warning body is ${JSON.stringify(measured.body)}`);
+  }
+  if (measured.button.trim() !== "Continue") {
+    errors.push(`${label}: warning button is ${JSON.stringify(measured.button)}`);
+  }
+  if (measured.eyebrow) errors.push(`${label}: content warning eyebrow is still shown`);
+  if (!(measured.titlePx >= 16)) errors.push(`${label}: warning title is ${measured.titlePx}px`);
+  if (!(measured.bodyPx >= 16)) errors.push(`${label}: warning body is ${measured.bodyPx}px`);
+  const titleContrast = contrastRatio(measured.titleColor, measured.panel);
+  const bodyContrast = contrastRatio(measured.bodyColor, measured.panel);
+  if (!(titleContrast >= 4.5)) {
+    errors.push(`${label}: warning title contrast ${titleContrast} (${measured.titleColor} on ${measured.panel})`);
+  }
+  if (!(bodyContrast >= 4.5)) {
+    errors.push(`${label}: warning body contrast ${bodyContrast} (${measured.bodyColor} on ${measured.panel})`);
+  }
+  console.log(
+    `warning ${label}: title ${measured.titlePx}px contrast ${titleContrast?.toFixed(2) ?? "?"} (${measured.titleColor} on ${measured.panel}), body ${measured.bodyPx}px contrast ${bodyContrast?.toFixed(2) ?? "?"} (${measured.bodyColor} on ${measured.panel}) at ${measured.width}x${measured.height}`,
+  );
+}
+
+async function assertCanvasAspect(page, errors, label) {
+  const view = await page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return { error: "canvas missing" };
+    return {
+      cssW: canvas.clientWidth,
+      cssH: canvas.clientHeight,
+      bufW: canvas.width,
+      bufH: canvas.height,
+      innerW: window.innerWidth,
+      innerH: window.innerHeight,
+    };
+  });
+  if (view.error) {
+    errors.push(`${label}: ${view.error}`);
+    return;
+  }
+  const cssAspect = view.cssW / Math.max(view.cssH, 1);
+  const bufAspect = view.bufW / Math.max(view.bufH, 1);
+  const viewAspect = view.innerW / Math.max(view.innerH, 1);
+  if (Math.abs(cssAspect - viewAspect) > 0.02) {
+    errors.push(`${label}: canvas css aspect ${cssAspect.toFixed(4)} stretched vs viewport ${viewAspect.toFixed(4)}`);
+  }
+  if (Math.abs(bufAspect - cssAspect) > 0.02) {
+    errors.push(`${label}: canvas buffer aspect ${bufAspect.toFixed(4)} stretched vs css ${cssAspect.toFixed(4)}`);
+  }
+}
+
+async function assertHiddenTabDoesNotSpike(page, errors) {
+  const dropped = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const canvas = document.querySelector("canvas");
+        const before = canvas instanceof HTMLCanvasElement ? canvas.fragPose : null;
+        document.dispatchEvent(new Event("visibilitychange"));
+        const start = performance.now();
+        while (performance.now() - start < 1500) {
+          // Block the frame so the next animation callback sees a multi-second gap.
+        }
+        requestAnimationFrame(() => {
+          const live = document.querySelector("canvas");
+          resolve({
+            simDt: live instanceof HTMLCanvasElement ? live.fragPose?.simDt ?? null : null,
+            before,
+            after: live instanceof HTMLCanvasElement ? live.fragPose : null,
+          });
+        });
+      }),
+  );
+  if (dropped.simDt !== 0) errors.push(`hidden tab resume simulated ${dropped.simDt}s`);
+  if (!dropped.after || !Number.isFinite(dropped.after.x) || !Number.isFinite(dropped.after.vx)) {
+    errors.push(`pose after hide is ${JSON.stringify(dropped.after)}`);
+  } else if (dropped.before) {
+    const jump = Math.hypot(dropped.after.x - dropped.before.x, dropped.after.z - dropped.before.z);
+    if (jump > 0.35) errors.push(`hidden tab moved the player ${jump.toFixed(2)} m`);
+  }
+
+  const clamped = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const start = performance.now();
+        while (performance.now() - start < 800) {
+          // A stall that is not a tab hide still has to clamp, not drop.
+        }
+        requestAnimationFrame(() => {
+          const live = document.querySelector("canvas");
+          resolve(live instanceof HTMLCanvasElement ? live.fragPose?.simDt ?? null : null);
+        });
+      }),
+  );
+  if (!(clamped === 0.25)) errors.push(`non-hidden stall simulated ${clamped}s, expected 0.25`);
+}
+
+async function assertContextLoss(page, errors) {
+  // A software-GL frame can occupy the thread for longer than the loss event
+  // needs. Stop scheduling another one, then wait out any frame already running.
+  const lost = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const canvas = document.querySelector("canvas");
+        if (!(canvas instanceof HTMLCanvasElement)) {
+          resolve({ error: "canvas missing" });
+          return;
+        }
+        const gl = canvas.getContext("webgl2");
+        if (!gl) {
+          resolve({ error: "webgl2 missing" });
+          return;
+        }
+        const ext = gl.getExtension("WEBGL_lose_context");
+        if (!ext) {
+          resolve({ error: "WEBGL_lose_context missing" });
+          return;
+        }
+        let saw = false;
+        canvas.addEventListener(
+          "webglcontextlost",
+          () => {
+            saw = true;
+          },
+          { once: true },
+        );
+        window.requestAnimationFrame = () => 0;
+        ext.loseContext();
+        const start = performance.now();
+        const check = () => {
+          const panel = document.querySelector("#context-lost");
+          if (panel instanceof HTMLElement && !panel.hidden) {
+            resolve({ ok: true, saw, waited: performance.now() - start });
+            return;
+          }
+          if (performance.now() - start > 15_000) {
+            resolve({ error: `overlay stayed hidden (event ${saw ? "fired" : "did not fire"})` });
+            return;
+          }
+          setTimeout(check, 50);
+        };
+        setTimeout(check, 0);
+      }),
+  );
+  if (lost.error) {
+    errors.push(`context loss did not show a message: ${lost.error}`);
+    return;
+  }
+  console.log(`context loss overlay in ${Math.round(lost.waited)} ms`);
+  const text = (await page.locator("#context-lost").innerText()).replace(/\s+/g, " ").trim();
+  if (!/graphics|display/i.test(text) || !/reload/i.test(text)) {
+    errors.push(`context loss message is not recoverable: ${text}`);
+  }
+  const reloadVisible = await page.locator("#context-lost-reload").isVisible();
+  if (!reloadVisible) errors.push("context loss overlay has no reload button");
+  await page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return;
+    canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.restoreContext();
+  });
+  try {
+    // Poll on a timer. The loss check replaced requestAnimationFrame, so an
+    // rAF poll would never run.
+    await page.waitForFunction(
+      () => {
+        const panel = document.querySelector("#context-lost");
+        return panel instanceof HTMLElement && panel.hidden;
+      },
+      undefined,
+      { timeout: 10_000, polling: 50 },
+    );
+  } catch {
+    const reloadVisible = await page.locator("#context-lost-reload").isVisible();
+    if (!reloadVisible) errors.push("context restore did not recover or offer a reload");
+  }
+}
+
+async function readRendererMemory(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement) || canvas.fragStats == null) return { error: "fragStats missing" };
+    const memory = performance.memory;
+    return {
+      geometries: canvas.fragStats.geometries,
+      textures: canvas.fragStats.textures,
+      calls: canvas.fragStats.calls,
+      triangles: canvas.fragStats.triangles,
+      heap: memory && Number.isFinite(memory.usedJSHeapSize) ? memory.usedJSHeapSize : null,
+    };
+  });
+}
+
+async function assertLongRun(page, errors) {
+  const samples = [];
+  const first = await readRendererMemory(page);
+  if (first.error) {
+    errors.push(first.error);
+    return;
+  }
+  samples.push(first);
+  for (let i = 0; i < 6; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 30_000));
+    samples.push(await readRendererMemory(page));
+  }
+  console.log(`long-run renderer.info and heap: ${JSON.stringify(samples)}`);
+  const warm = samples[1];
+  const end = samples[samples.length - 1];
+  if (warm.error || end.error) {
+    errors.push(warm.error || end.error);
+    return;
+  }
+  if (!(warm.geometries > 0) || !(warm.textures > 0)) {
+    errors.push(`renderer memory did not allocate (geometries ${warm.geometries}, textures ${warm.textures})`);
+  }
+  // The first sample is before every pooled mesh has been drawn once.
+  // WebGLRenderer counts a geometry when it is uploaded, so the warm sample
+  // is the one that must stay flat.
+  for (const sample of samples.slice(1)) {
+    if (sample.geometries !== warm.geometries || sample.textures !== warm.textures) {
+      errors.push(
+        `renderer memory grew after warm-up geometries ${warm.geometries}->${sample.geometries} textures ${warm.textures}->${sample.textures}`,
+      );
+      break;
+    }
+  }
+}
+
 async function assertReadableType(page, errors, label) {
   const fonts = await page.evaluate(() => {
     const px = (el) => (el instanceof HTMLElement ? Number.parseFloat(getComputedStyle(el).fontSize) : null);
-    const labels = [...document.querySelectorAll("#hud-hp-stat .hud-label, #hud-ammo-stat .hud-label")].map((el) => {
-      const style = getComputedStyle(el);
-      const stat = el.parentElement instanceof HTMLElement ? getComputedStyle(el.parentElement) : null;
-      return {
-        text: el.textContent,
-        size: px(el),
-        color: style.color,
-        backing: stat?.backgroundColor ?? "",
-      };
-    });
+    const ink = (el, style) => {
+      const probe = document.createElement("canvas").getContext("2d");
+      if (!probe) return null;
+      probe.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      return probe.measureText(el.textContent ?? "").actualBoundingBoxAscent;
+    };
+    const labels = [...document.querySelectorAll("#hud-hp-stat .hud-label, #hud-ammo-stat .hud-label, #hud-wave")].map(
+      (el) => {
+        const style = getComputedStyle(el);
+        const stat = el.parentElement instanceof HTMLElement ? getComputedStyle(el.parentElement) : null;
+        const backing = el.id === "hud-wave" ? style.backgroundColor : (stat?.backgroundColor ?? "");
+        return {
+          text: el.textContent,
+          size: px(el),
+          rendered: ink(el, style),
+          box: el.getBoundingClientRect().height,
+          color: style.color,
+          backing,
+        };
+      },
+    );
     return {
       copy: px(document.querySelector(".copy")),
-      eyebrow: px(document.querySelector(".eyebrow")),
       labels,
       height: window.innerHeight,
+      width: window.innerWidth,
     };
   });
   if (!(fonts.copy >= 16)) errors.push(`${label}: body text is ${fonts.copy}px at ${fonts.height}px tall`);
-  if (!(fonts.eyebrow >= 12)) errors.push(`${label}: eyebrow is ${fonts.eyebrow}px at ${fonts.height}px tall`);
-  if (fonts.labels.length < 2) errors.push(`${label}: expected HP and AMMO labels, found ${fonts.labels.length}`);
+  if (fonts.labels.length < 3) errors.push(`${label}: expected HP, AMMO, and WAVE, found ${fonts.labels.length}`);
   for (const hudLabel of fonts.labels) {
     if (!(hudLabel.size >= 12)) {
-      errors.push(`${label}: ${hudLabel.text} label is ${hudLabel.size}px at ${fonts.height}px tall`);
+      errors.push(`${label}: ${hudLabel.text} computed ${hudLabel.size}px at ${fonts.height}px tall`);
     }
+    if (!(hudLabel.rendered >= 12)) {
+      errors.push(`${label}: ${hudLabel.text} rendered ink ${hudLabel.rendered}px (computed ${hudLabel.size}px)`);
+    }
+    if (hudLabel.box > 0 && !(hudLabel.box >= 12)) {
+      errors.push(`${label}: ${hudLabel.text} box ${hudLabel.box}px`);
+    }
+    console.log(
+      `hud ${label} ${hudLabel.text}: computed ${hudLabel.size}px, rendered ${Number(hudLabel.rendered).toFixed(2)}px, box ${hudLabel.box.toFixed(2)}px, contrast pending at ${fonts.width}x${fonts.height}`,
+    );
     const ratio = contrastRatio(hudLabel.color, hudLabel.backing);
     if (!(ratio >= 4.5)) {
       errors.push(
         `${label}: ${hudLabel.text} contrast ${ratio ?? "unreadable"} (${hudLabel.color} on ${hudLabel.backing})`,
       );
+    } else {
+      console.log(`hud ${label} ${hudLabel.text} contrast ${ratio.toFixed(2)}`);
     }
   }
 }
@@ -305,10 +580,7 @@ async function assertShellFlow(page, errors) {
   const lockHeld = () => page.evaluate(() => document.pointerLockElement != null);
 
   await expectPhase(page, errors, "warning", "fresh load");
-  const warningText = (await visibleText(page, "#content-warning")).toLowerCase();
-  for (const phrase of ["frag", "blood and gibs", "fictional violence", "flashing lights"]) {
-    if (!warningText.includes(phrase)) errors.push(`warning text missing "${phrase}"`);
-  }
+  await assertWarningCopy(page, errors, "shell");
   if (await page.locator("#click-to-play").evaluate((el) => !el.hidden)) {
     errors.push("click-to-play visible before the warning is acknowledged");
   }
@@ -671,6 +943,59 @@ async function runDevSmoke(browser, errors) {
       return;
     }
 
+    const raced = await page.evaluate(() => {
+      window.__fragDamage(500);
+      const death = document.querySelector("#death-recap");
+      const before = death?.textContent ?? "";
+      const shown = death instanceof HTMLElement && death.hidden === false;
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Escape", bubbles: true, cancelable: true }));
+      window.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+      return {
+        shown,
+        hp: document.querySelector("#hud-hp")?.textContent ?? "",
+        phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+        text: document.querySelector("#death-recap")?.textContent ?? "",
+        before,
+        count: document.querySelectorAll("#death-recap").length,
+        warningHidden: document.querySelector("#content-warning")?.hidden ?? false,
+      };
+    });
+    if (!raced.shown) errors.push("death during pause did not show the recap before the blur");
+    if (raced.hp !== "0") errors.push(`death during pause/blur restarted (hp ${raced.hp})`);
+    if (raced.phase !== "paused") errors.push(`death during pause left phase ${raced.phase}`);
+    if (raced.count !== 1) errors.push(`death recap elements ${raced.count}`);
+    if (raced.text !== raced.before) errors.push("death during pause rewrote the recap");
+    if (!raced.warningHidden) errors.push("warning returned when dying during pause");
+    if (raced.phase === "paused") await page.locator("#pause").click();
+    const resumedDead = await page.evaluate(() => {
+      const death = document.querySelector("#death-recap");
+      return {
+        hp: document.querySelector("#hud-hp")?.textContent ?? "",
+        mode: document.querySelector("#hud")?.getAttribute("data-mode") ?? "",
+        hidden: death instanceof HTMLElement ? death.hidden : true,
+        count: document.querySelectorAll("#death-recap").length,
+        warningHidden: document.querySelector("#content-warning")?.hidden ?? false,
+      };
+    });
+    if (resumedDead.hp !== "0" || resumedDead.mode !== "dead" || resumedDead.hidden || resumedDead.count !== 1) {
+      errors.push(`resume after a paused death did not keep one recap (${JSON.stringify(resumedDead)})`);
+    }
+    if (!resumedDead.warningHidden) errors.push("warning returned when resuming a paused death");
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await page.locator("#death-recap").click({ force: true });
+    const afterRace = await page.evaluate(() => ({
+      hp: document.querySelector("#hud-hp")?.textContent ?? "",
+      warningHidden: document.querySelector("#content-warning")?.hidden ?? false,
+      phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+    }));
+    if (afterRace.hp !== "100") errors.push(`restart after a paused death hp is ${afterRace.hp}`);
+    if (!afterRace.warningHidden || afterRace.phase === "warning") {
+      errors.push(`warning returned after restart from a paused death (${afterRace.phase})`);
+    }
+    if (afterRace.phase === "paused") await page.locator("#pause").click();
+
     await page.evaluate(() => window.__fragDamage(500));
     try {
       await page.waitForFunction(
@@ -706,7 +1031,11 @@ async function runDevSmoke(browser, errors) {
       errors.push(`dev warning returned on death (${recap.phase})`);
     }
 
-    await page.locator("#death-recap").click({ force: true });
+    await page.keyboard.press("Enter");
+    const earlyRestart = await page.evaluate(() => document.querySelector("#hud-hp")?.textContent ?? "");
+    if (earlyRestart !== "0") errors.push(`enter during the recap lockout restarted (hp ${earlyRestart})`);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await page.keyboard.press("Enter");
     const restarted = await page.evaluate(() => {
       const warning = document.querySelector("#content-warning");
       const canvas = document.querySelector("canvas");
@@ -776,6 +1105,8 @@ async function runDevSmoke(browser, errors) {
             triangles: stats.triangles,
             lines: stats.lines,
             points: stats.points,
+            geometries: stats.geometries,
+            textures: stats.textures,
             wave: snap.wave,
             count: snap.count,
             bolts: snap.bolts,
@@ -792,7 +1123,7 @@ async function runDevSmoke(browser, errors) {
     }
     if (report) {
       console.log(
-        `renderer.info at wave ${report.wave} with ${report.count} drones firing: calls ${report.calls}, triangles ${report.triangles}, lines ${report.lines}, points ${report.points}, live bolts ${report.bolts}`,
+        `renderer.info at wave ${report.wave} with ${report.count} drones firing: calls ${report.calls}, triangles ${report.triangles}, lines ${report.lines}, points ${report.points}, geometries ${report.geometries}, textures ${report.textures}, live bolts ${report.bolts}`,
       );
     }
   } catch (error) {
@@ -817,6 +1148,148 @@ async function runDevSmoke(browser, errors) {
   }
 }
 
+function installFireProbe(page) {
+  return page.addInitScript(() => {
+    const names = [];
+    const details = [];
+    const orig = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+      if (type === "mousedown" || type === "mouseup") {
+        const id = this === window ? "window" : this === document ? "document" : this.id || this.tagName || "node";
+        const role = typeof listener.fragRole === "string" ? listener.fragRole : "";
+        const label = role || listener.name || "anon";
+        const src = typeof listener === "function" ? Function.prototype.toString.call(listener).replace(/\s+/g, " ").slice(0, 160) : "";
+        names.push(`${id}:${type}:${label}`);
+        details.push({ id, type, label, role, src });
+      }
+      return orig.call(this, type, listener, options);
+    };
+    window.__fireListenerNames = names;
+    window.__fireListenerDetails = details;
+    const native = window.requestAnimationFrame.bind(window);
+    let last = 0;
+    window.requestAnimationFrame = (callback) =>
+      native((time) => {
+        if (last !== 0 && time - last < 200) {
+          window.requestAnimationFrame(callback);
+          return;
+        }
+        last = time;
+        callback(time);
+      });
+  });
+}
+
+async function readFire(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+    const names = window.__fireListenerNames ?? [];
+    return {
+      ammo: document.querySelector("#hud-ammo")?.textContent ?? "",
+      sim: sim?.sim ?? null,
+      shots: sim?.shots ?? null,
+      firstShot: sim?.firstShot ?? null,
+      lastShot: sim?.lastShot ?? null,
+      frames: sim?.frames ?? null,
+      wall: performance.now(),
+      mouseDown: names.filter((name) => name.startsWith("window:mousedown:")).length,
+      mouseDownNames: names.filter((name) => name.startsWith("window:mousedown:")),
+      mouseDownDetails: (window.__fireListenerDetails ?? []).filter((row) => row.id === "window" && row.type === "mousedown"),
+    };
+  });
+}
+
+async function assertThrottledFire(browser, errors) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  page.on("pageerror", (error) => {
+    errors.push(`fire probe pageerror: ${error.message}`);
+  });
+  try {
+    await installFireProbe(page);
+    await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector("canvas", { timeout: 10_000 });
+    await page.locator("#content-warning-continue").click();
+    await page.locator("#click-to-play").click();
+    await page.waitForFunction(
+      () => document.querySelector("#hud")?.getAttribute("data-mode") === "play" && document.pointerLockElement != null,
+      undefined,
+      { timeout: 8_000, polling: 50 },
+    );
+    const before = await readFire(page);
+    await page.mouse.move(640, 400);
+    await page.mouse.down();
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    await page.mouse.up();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const after = await readFire(page);
+    const wall = (after.wall - before.wall) / 1000;
+    const sim = after.sim - before.sim;
+    const shots = after.shots - before.shots;
+    const ratio = wall > 0 ? sim / wall : 0;
+    const start = before.shots > 0 ? before.lastShot : after.firstShot;
+    const intervals = before.shots > 0 ? shots : Math.max(0, shots - 1);
+    const span = after.lastShot - start;
+    const rate = intervals > 0 && Number.isFinite(span) && span > 0 ? intervals / span : null;
+    console.log(
+      `throttled hold: wall ${wall.toFixed(3)}s sim ${sim.toFixed(3)}s ratio ${ratio.toFixed(3)} (below 1 is the 250 ms stall clamp) shots ${shots} ${rate == null ? "rate n/a" : `${rate.toFixed(3)} shots/sim s`} ammo ${before.ammo} -> ${after.ammo} frames ${after.frames - before.frames}`,
+    );
+    if (ratio > 1.35) errors.push(`sim time ran ${ratio.toFixed(2)}× wall time during a 5 fps hold`);
+    if (shots > 56) errors.push(`5 fps hold fired ${shots} shots in ${wall.toFixed(2)}s wall (ammo ${after.ammo})`);
+    if (rate != null && Math.abs(rate - 8) > 0.05) {
+      errors.push(`shots per sim second ${rate.toFixed(3)}, expected about 8`);
+    }
+    if (after.ammo === "0+0") errors.push("5 fps hold emptied 40+40 inside 6 s");
+    const fireHandlers = after.mouseDownNames.filter((name) => name.endsWith(":fire"));
+    for (const row of after.mouseDownDetails) {
+      const kind = row.role === "fire" ? "game fire handler" : "test runner, not a game handler";
+      console.log(`throttled listener ${row.label} (${kind}): ${row.src}`);
+    }
+    if (fireHandlers.length !== 1) {
+      errors.push(`game fire mousedown handlers ${fireHandlers.length}: ${after.mouseDownNames.join(", ")}`);
+    }
+    for (const row of after.mouseDownDetails) {
+      if (row.role === "fire") continue;
+      if (!row.src.includes("_hitTargetInterceptor")) {
+        errors.push(`window mousedown is not the tagged fire handler or the test runner: ${row.label} ${row.src}`);
+      }
+    }
+
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => document.querySelector("#app-shell")?.getAttribute("data-phase") === "paused",
+      undefined,
+      { timeout: 3_000 },
+    );
+    await page.locator("#pause").click();
+    await page.waitForFunction(() => document.pointerLockElement != null, undefined, {
+      timeout: 4_000,
+      polling: 50,
+    });
+    const relocked = await readFire(page);
+    if (relocked.mouseDown !== after.mouseDown) {
+      errors.push(`fire listeners grew after pointer re-lock (${after.mouseDown} -> ${relocked.mouseDown})`);
+    }
+    const burstBefore = relocked;
+    for (let i = 0; i < 8; i += 1) {
+      await page.mouse.down();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await page.mouse.up();
+      await new Promise((resolve) => setTimeout(resolve, 70));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const burstAfter = await readFire(page);
+    const burstShots = burstAfter.shots - burstBefore.shots;
+    console.log(`throttled bursts: ${burstShots} shots from 8 clicks, ammo ${burstAfter.ammo}`);
+    if (burstShots > 12) errors.push(`8 clicks fired ${burstShots} shots`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`throttled fire probe failed: ${message}`);
+  } finally {
+    await page.close();
+  }
+}
+
 try {
   await waitForPort(20_000);
   const browser = await chromium.launch({
@@ -826,6 +1299,7 @@ try {
       "--use-angle=swiftshader",
       "--enable-webgl",
       "--ignore-gpu-blocklist",
+      "--enable-precise-memory-info",
     ],
   });
   try {
@@ -894,9 +1368,26 @@ try {
     }
 
     assertHorizontalFov(await readView(page), errors, "initial viewport");
+    await assertCanvasAspect(page, errors, "initial viewport");
     await assertReadableType(page, errors, "720p");
+    await assertWarningCopy(page, errors, "720p");
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await assertWarningCopy(page, errors, "1080p");
+    await page.setViewportSize({ width: 1280, height: 480 });
+    await assertWarningCopy(page, errors, "480p");
+    await page.setViewportSize({ width: 1280, height: 720 });
 
     await assertShellFlow(page, errors);
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
+    await assertReadableType(page, errors, "1280x800");
+    await assertCanvasAspect(page, errors, "after resize 1280x800");
 
     await page.setViewportSize({ width: 1920, height: 1080 });
     await page.evaluate(
@@ -907,6 +1398,7 @@ try {
     );
     await assertReadableType(page, errors, "1080p");
     assertHorizontalFov(await readView(page), errors, "after resize 1920x1080");
+    await assertCanvasAspect(page, errors, "after resize 1920x1080");
 
     await page.setViewportSize({ width: 1280, height: 480 });
     await page.evaluate(
@@ -916,6 +1408,7 @@ try {
         }),
     );
     await assertReadableType(page, errors, "480p");
+    await assertCanvasAspect(page, errors, "after resize 1280x480");
 
     const stats = await page.evaluate(() => {
       const canvas = document.querySelector("canvas");
@@ -949,6 +1442,7 @@ try {
         }),
     );
     assertHorizontalFov(await readView(page), errors, "after resize 900x700");
+    await assertCanvasAspect(page, errors, "after resize 900x700");
 
     await page.setViewportSize({ width: 700, height: 900 });
     await page.evaluate(
@@ -958,6 +1452,12 @@ try {
         }),
     );
     assertHorizontalFov(await readView(page), errors, "after resize 700x900");
+    await assertCanvasAspect(page, errors, "after resize 700x900");
+
+    await assertHiddenTabDoesNotSpike(page, errors);
+    await assertLongRun(page, errors);
+    await assertContextLoss(page, errors);
+    await assertThrottledFire(browser, errors);
 
     await runDevSmoke(browser, errors);
 

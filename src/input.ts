@@ -154,7 +154,10 @@ export function takeLatch(latch: InputLatch, lookX = 0, lookY = 0): InputState {
   return state;
 }
 
-export function createInput(canvas: HTMLCanvasElement): {
+export function createInput(
+  canvas: HTMLCanvasElement,
+  hooks?: { onPointerDown?: () => void; onPointerUp?: () => void },
+): {
   sample(captured: boolean): InputState;
 } {
   const held = new Set<string>();
@@ -203,12 +206,16 @@ export function createInput(canvas: HTMLCanvasElement): {
     if (event.button !== 0) return;
     fire = true;
     sync();
+    hooks?.onPointerDown?.();
   }
+  // Survives minification so the smoke test can tell this handler from the runner's.
+  Object.assign(onMouseDown, { fragRole: "fire" });
 
   function onMouseUp(event: MouseEvent): void {
     if (event.button !== 0) return;
     fire = false;
     sync();
+    hooks?.onPointerUp?.();
   }
 
   function onMouseMove(event: MouseEvent): void {

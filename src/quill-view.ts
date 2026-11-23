@@ -92,7 +92,7 @@ export function mountQuillView(
   let dummyHandle: HitboxHandle | null = null;
   let debugVisible = false;
   // Production builds drop this. The target is not part of the shipped scene.
-  if (import.meta.env.DEV && debugTarget) {
+  if (import.meta.env?.DEV && debugTarget) {
     dummy = new Mesh(
       new SphereGeometry(debugTarget.radius, 10, 8),
       new MeshBasicMaterial({ color: MAGENTA, wireframe: true, toneMapped: false, fog: false }),

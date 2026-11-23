@@ -13,6 +13,7 @@ import {
   JUMP_SPEED,
   LANDING_GRACE,
   MAX_FRAME_SECONDS,
+  clampedFrameSeconds,
   PLANAR_CAP,
   SIM_DT,
   STEP_HEIGHT,
@@ -360,6 +361,16 @@ test("jump apex and airtime match the spec through the game loop", () => {
       `measured jump at ${fps} fps apex ${result.peak.toFixed(3)} m airtime ${result.airtime.toFixed(3)} s`,
     );
   }
+});
+
+test("a hidden tab drops the gap and any other stall clamps at 250 ms", () => {
+  assert.equal(clampedFrameSeconds(0, 5000, false), 0);
+  assert.equal(clampedFrameSeconds(1000, 1016, false), 0.016);
+  assert.equal(clampedFrameSeconds(1000, 1200, false), 0.2);
+  assert.equal(clampedFrameSeconds(1000, 5000, false), MAX_FRAME_SECONDS);
+  assert.equal(clampedFrameSeconds(1000, 5000, true), 0);
+  assert.equal(clampedFrameSeconds(1000, 900, false), 0);
+  assert.equal(clampedFrameSeconds(Number.NaN, 1000, false), 0);
 });
 
 test("the sim stays real time down to 20 fps and only clamps long stalls", () => {
