@@ -102,10 +102,10 @@ CI job `build` runs `npm ci`, `npm run build`, the license and provenance gate, 
 
 ## Deploys
 
-Deploy workflows build with `npm ci` and `npm run build`, then upload the prebuilt `dist/` folder. `public/staticwebapp.config.json` ships with that build (SPA fallback, `X-Content-Type-Options`, and a same-origin content security policy).
+Staging, pull-request previews, and a production deploy with `target` set to `game` build with `npm ci` and `npm run build`, then upload the prebuilt `dist/` folder. `public/staticwebapp.config.json` ships with that build (SPA fallback, `X-Content-Type-Options`, and a same-origin content security policy).
 
 Pull requests from this repository deploy a preview environment and comment the preview URL. Closing the pull request deletes the preview. Forks are skipped, because they cannot read the deployment token.
 
-Pushes to `main` deploy the named Static Web Apps environment `staging`.
+Pushes to `main` deploy the named Static Web Apps environment `staging`. Staging and previews always serve the game.
 
-Production does not deploy on push, pull request, or a schedule. Run it from GitHub: Actions → Deploy prod → Run workflow, with the branch set to `main`. That job uses the `production` environment, so it waits for approval, checks out `main`, and deploys the production slot.
+Production does not deploy on push, pull request, or a schedule. The production slot is what the future custom domain `frag.n6s.ai` will serve. Run it from GitHub: Actions → Deploy prod → Run workflow, with the branch set to `main`. The `target` input is `coming-soon` (the default) or `game`. `coming-soon` skips the Node install and build and uploads the `coming-soon/` folder. `game` uploads `dist/`. That job uses the `production` environment, so it waits for approval, checks out `main`, and deploys the production slot.

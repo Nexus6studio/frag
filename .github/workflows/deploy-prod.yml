@@ -2,6 +2,14 @@ name: Deploy prod
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: What to publish to the production slot
+        type: choice
+        options:
+          - coming-soon
+          - game
+        default: coming-soon
 
 permissions:
   contents: read
@@ -29,14 +37,17 @@ jobs:
           ref: main
 
       - name: Setup Node.js
+        if: inputs.target == 'game'
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Install
+        if: inputs.target == 'game'
         run: npm ci
 
       - name: Build
+        if: inputs.target == 'game'
         run: npm run build
 
       - name: Deploy production
@@ -45,7 +56,7 @@ jobs:
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
           action: upload
-          app_location: dist
+          app_location: ${{ inputs.target == 'game' && 'dist' || 'coming-soon' }}
           api_location: ""
           output_location: ""
           skip_app_build: true
