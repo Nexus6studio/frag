@@ -273,8 +273,15 @@ test("spawns stay inside the atrium and at least 8 m from the player", () => {
     hitboxes: createHitboxWorld(),
     origin: ATRIUM_SPAWN,
   });
-  assert.equal(fight.enforcers.aliveCount(), 1);
+  assert.equal(fight.enforcers.aliveCount(), 0);
   assert.equal(fight.wisps.aliveCount(), 2);
+  const pool = fight.enforcers.units;
+  const sparks = fight.enforcers.sparks;
+  fight.killAll();
+  fight.update(2, ATRIUM_SPAWN);
+  assert.equal(fight.wisps.wave, 2);
+  assert.equal(fight.wisps.aliveCount(), 3);
+  assert.equal(fight.enforcers.aliveCount(), 1);
   for (const unit of fight.enforcers.units) {
     if (!unit.alive) continue;
     const apart = Math.hypot(
@@ -291,19 +298,12 @@ test("spawns stay inside the atrium and at least 8 m from the player", () => {
     assert.equal(unit.hp, ENFORCER_HP);
     assert.equal(unit.armor, ENFORCER_ARMOR);
   }
-  const pool = fight.enforcers.units;
-  const sparks = fight.enforcers.sparks;
-  fight.killAll();
-  fight.update(2, ATRIUM_SPAWN);
-  assert.equal(fight.wisps.wave, 2);
-  assert.equal(fight.wisps.aliveCount(), 3);
-  assert.equal(fight.enforcers.aliveCount(), 1);
   assert.equal(fight.enforcers.units, pool);
   assert.equal(fight.enforcers.sparks, sparks);
   fight.wisps.restart(ATRIUM_SPAWN);
   assert.equal(fight.wisps.wave, 1);
   assert.equal(fight.wisps.aliveCount(), 2);
-  assert.equal(fight.enforcers.aliveCount(), 1);
+  assert.equal(fight.enforcers.aliveCount(), 0);
   assert.ok(fight.enforcers.sparks.every((slot) => slot.alive === false));
   assert.equal(fight.enforcers.units, pool);
 });
@@ -334,29 +334,31 @@ test("the enforcer waits 2 s after start, restart, and each new wave", () => {
     origin: ATRIUM_SPAWN,
   });
   const armed = () => fight.enforcers.units.filter((unit) => unit.alive);
-  assert.ok(armed().length >= 1);
-  assert.ok(armed().every((unit) => unit.grace === ENFORCER_GRACE));
-  step(fight, 1.5, ATRIUM_SPAWN);
-  assert.equal(fight.enforcers.shotCount(), 0, "wave 1 fired during grace");
-  assert.ok(armed().every((unit) => unit.grace > 0.4));
+  assert.equal(armed().length, 0, "wave 1 fields an enforcer");
 
-  fight.killAll();
-  let gap = 0;
-  while (fight.wisps.wave === 1 && gap < WAVE_GAP_SECONDS + 0.5) {
-    fight.update(DT, ATRIUM_SPAWN);
-    gap += DT;
+  function reachWave2() {
+    fight.killAll();
+    let gap = 0;
+    while (fight.wisps.wave === 1 && gap < WAVE_GAP_SECONDS + 0.5) {
+      fight.update(DT, ATRIUM_SPAWN);
+      gap += DT;
+    }
+    assert.equal(fight.wisps.wave, 2);
+    assert.ok(gap >= WAVE_GAP_SECONDS - DT, `wave 2 arrived early at ${gap.toFixed(3)} s`);
+    assert.equal(armed().length, 1);
+    assert.ok(armed().every((unit) => unit.grace > ENFORCER_GRACE - 0.02 && unit.grace <= ENFORCER_GRACE));
   }
-  assert.equal(fight.wisps.wave, 2);
-  assert.ok(gap >= WAVE_GAP_SECONDS - DT, `wave 2 arrived early at ${gap.toFixed(3)} s`);
-  assert.ok(armed().length >= 1);
-  assert.ok(armed().every((unit) => unit.grace > ENFORCER_GRACE - 0.02 && unit.grace <= ENFORCER_GRACE));
+
+  reachWave2();
   const shotsAtWave = fight.enforcers.shotCount();
   step(fight, 1.5, ATRIUM_SPAWN);
-  assert.equal(fight.enforcers.shotCount(), shotsAtWave, "the next wave fired during grace");
+  assert.equal(fight.enforcers.shotCount(), shotsAtWave, "wave 2 fired during grace");
+  assert.ok(armed().every((unit) => unit.grace > 0.4));
 
   fight.wisps.restart(ATRIUM_SPAWN);
   assert.equal(fight.wisps.wave, 1);
-  assert.ok(armed().every((unit) => unit.grace === ENFORCER_GRACE));
+  assert.equal(armed().length, 0, "restart armed a wave 1 enforcer");
+  reachWave2();
   const shotsAtRestart = fight.enforcers.shotCount();
   step(fight, 1.5, ATRIUM_SPAWN);
   assert.equal(fight.enforcers.shotCount(), shotsAtRestart, "restart fired during grace");

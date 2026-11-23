@@ -15,6 +15,8 @@ import {
   WISP_BOLT_RADIUS,
   WISP_BOLT_SPEED,
   WISP_SPAWN_GRACE,
+  WISP_WAVE1_SPAWN_GRACE,
+  WISP_WAVE1_BURST_GAP,
   WISP_BURST_GAP,
   WISP_CLOSE,
   WISP_COUNT,
@@ -34,7 +36,7 @@ import {
   wispInsideVolume,
   wispVisorHex,
 } from "../src/wisp.ts";
-import { DRONE_CAP } from "../src/waves.ts";
+import { DRONE_CAP, WAVE_GAP_SECONDS } from "../src/waves.ts";
 import { traceSegment } from "../src/trace.ts";
 import { boltVisualScale } from "../src/wisp-view.ts";
 import { HIT_FLASH_SECONDS } from "../src/feel.ts";
@@ -154,7 +156,7 @@ test("each bolt deals 8 and a hull stops the shot", () => {
   const drops = [];
   let previous = player.get().hp;
   let t = 0;
-  while (drops.length < 2 && t < 4) {
+  while (drops.length < 2 && t < WISP_WAVE1_SPAWN_GRACE + 2) {
     sim.update(DT, feet);
     const hp = player.get().hp;
     if (hp !== previous) {
@@ -183,15 +185,15 @@ test("each bolt deals 8 and a hull stops the shot", () => {
     hitboxes: createHitboxWorld(),
     origin: { x: 0, y: 0, z: 0 },
   });
-  step(blockedSim, 3, feet);
+  step(blockedSim, WISP_WAVE1_SPAWN_GRACE + 1, feet);
   assert.ok(blockedSim.boltCount(0) >= 2, "the walled drone never fired");
   assert.equal(blocked.get().hp, 100, "a bolt passed the hull");
 });
 
-test("telegraph leads every burst, bolts are 0.15 s apart, and bursts are 1.8 s apart", () => {
+test("telegraph leads every burst, bolts are 0.15 s apart, and bursts use the wave gap", () => {
   const { sim } = atriumSim();
   const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
-  step(sim, 8, feet);
+  step(sim, WISP_WAVE1_SPAWN_GRACE + 2 * WISP_WAVE1_BURST_GAP + WISP_BOLT_GAP + 1, feet);
   for (const drone of sim.drones) {
     if (!drone.alive) continue;
     const bolts = sim.boltCount(drone.index);
@@ -209,7 +211,7 @@ test("telegraph leads every burst, bolts are 0.15 s apart, and bursts are 1.8 s 
       if (burst + 1 < bursts) {
         const next = sim.boltTime(drone.index, (burst + 1) * 2);
         const gap = next - second;
-        assert.ok(Math.abs(gap - WISP_BURST_GAP) < 1e-4, `burst gap ${gap}`);
+        assert.ok(Math.abs(gap - WISP_WAVE1_BURST_GAP) < 1e-4, `burst gap ${gap}`);
       }
     }
     console.log(
@@ -219,11 +221,21 @@ test("telegraph leads every burst, bolts are 0.15 s apart, and bursts are 1.8 s 
 });
 
 test("bolts travel at 18 m/s and stay in a fixed pool", () => {
-  const { sim } = atriumSim();
-  const feet = { x: 40, y: GROUND_Y, z: 40 };
+  const open = {
+    boxes: [{ min: { x: -80, y: -1, z: -80 }, max: { x: 80, y: 0, z: 80 } }],
+    ramps: [],
+  };
+  const player = createPlayerState({ hp: 500 });
+  const sim = createWispSim({
+    hull: open,
+    player,
+    hitboxes: createHitboxWorld(),
+    origin: { x: 0, y: 0, z: 0 },
+  });
+  const feet = { x: 0, y: 0, z: 0 };
   let bolt = null;
   let guard = 0;
-  while (!bolt && guard < WISP_SPAWN_GRACE + 1) {
+  while (!bolt && guard < WISP_WAVE1_SPAWN_GRACE + WISP_TELEGRAPH + 0.4) {
     sim.update(DT, feet);
     guard += DT;
     bolt = sim.bolts.find((slot) => slot.alive) ?? null;
@@ -232,9 +244,9 @@ test("bolts travel at 18 m/s and stay in a fixed pool", () => {
   const x = bolt.x;
   const y = bolt.y;
   const z = bolt.z;
-  sim.update(0.05, feet);
+  sim.update(DT, feet);
   const moved = Math.hypot(bolt.x - x, bolt.y - y, bolt.z - z);
-  const speed = moved / 0.05;
+  const speed = moved / DT;
   console.log(`wisp bolt speed ${speed.toFixed(2)} m/s, radius ${WISP_BOLT_RADIUS} m`);
   assert.ok(Math.abs(speed - WISP_BOLT_SPEED) < 0.05, `speed ${speed}`);
   assert.equal(sim.bolts.length, WISP_BOLT_CAP);
@@ -387,7 +399,7 @@ test("a live bolt deals 8 through applyDamage when the player has armor", () => 
   });
   const feet = { x: 0, y: 0, z: 0 };
   let t = 0;
-  while (player.get().hp === 80 && t < 4) {
+  while (player.get().hp === 80 && t < WISP_WAVE1_SPAWN_GRACE + 2) {
     sim.update(DT, feet);
     t += DT;
   }
@@ -395,24 +407,58 @@ test("a live bolt deals 8 through applyDamage when the player has armor", () => 
   assert.equal(player.get().armor, 4);
 });
 
-test("drones do not fire during the 2 s spawn grace, at 120 fps or 5 fps", () => {
+test("wave 1 drones wait out their spawn grace and later waves keep 2 s, at 120 fps or 5 fps", () => {
   for (const dt of [DT, 0.2]) {
     const { sim } = atriumSim();
     const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
     let t = 0;
-    while (t < WISP_SPAWN_GRACE - dt) {
+    while (t < WISP_WAVE1_SPAWN_GRACE - dt) {
       sim.update(dt, feet);
       t += dt;
     }
-    assert.equal(sim.boltCount(0), 0, `${dt} s steps fired during grace`);
-    assert.equal(sim.boltCount(1), 0, `${dt} s steps fired during grace`);
-    while (t < WISP_SPAWN_GRACE + 0.35) {
+    assert.equal(sim.boltCount(0), 0, `${dt} s steps fired during wave 1 grace`);
+    assert.equal(sim.boltCount(1), 0, `${dt} s steps fired during wave 1 grace`);
+    while (t < WISP_WAVE1_SPAWN_GRACE + 0.35) {
       sim.update(dt, feet);
       t += dt;
     }
-    assert.ok(sim.boltCount(0) >= 1, `lead did not fire after grace at dt ${dt}`);
+    assert.ok(sim.boltCount(0) >= 1, `lead did not fire after wave 1 grace at dt ${dt}`);
     const first = sim.boltTime(0, 0);
-    assert.ok(first >= WISP_SPAWN_GRACE + WISP_TELEGRAPH - 0.02, `first bolt ${first}`);
+    assert.ok(first >= WISP_WAVE1_SPAWN_GRACE + WISP_TELEGRAPH - 0.02, `first bolt ${first}`);
+
+    sim.killAlive();
+    const mark = sim.time;
+    while (sim.wave < 2 && sim.time < mark + WAVE_GAP_SECONDS + 0.5) sim.update(dt, feet);
+    assert.equal(sim.wave, 2, `wave 2 did not spawn at dt ${dt}`);
+    const spawnedAt = sim.time;
+    const lead = sim.boltCount(0);
+    const wing = sim.boltCount(1);
+    let elapsed = 0;
+    while (elapsed < WISP_SPAWN_GRACE - dt) {
+      sim.update(dt, feet);
+      elapsed += dt;
+    }
+    assert.equal(sim.boltCount(0), lead, `wave 2 fired during the 2 s grace at dt ${dt}`);
+    assert.equal(sim.boltCount(1), wing, `wave 2 fired during the 2 s grace at dt ${dt}`);
+    while (elapsed < WISP_SPAWN_GRACE + 0.35) {
+      sim.update(dt, feet);
+      elapsed += dt;
+    }
+    assert.ok(sim.boltCount(0) > lead, `wave 2 lead did not fire after grace at dt ${dt}`);
+    const wave2First = sim.boltTime(0, lead);
+    assert.ok(
+      wave2First >= spawnedAt + WISP_SPAWN_GRACE + WISP_TELEGRAPH - 0.02,
+      `wave 2 first bolt ${wave2First} spawned at ${spawnedAt}`,
+    );
+    while (
+      sim.boltCount(0) < lead + 4 &&
+      sim.time < spawnedAt + WISP_SPAWN_GRACE + 2 * WISP_BURST_GAP + 1
+    ) {
+      sim.update(dt, feet);
+    }
+    assert.ok(sim.boltCount(0) >= lead + 4, `wave 2 lead fired ${sim.boltCount(0) - lead}`);
+    const burst = sim.boltTime(0, lead + 2) - sim.boltTime(0, lead + 1);
+    assert.ok(Math.abs(burst - WISP_BURST_GAP) < 0.02, `wave 2 burst gap ${burst}`);
   }
 });
 
@@ -430,8 +476,9 @@ test("burst cadence holds at 5 fps and two drones stay under the scripted damage
   });
   const feet = { x: 0, y: 0, z: 0 };
   const dt = 0.2;
+  const span = WISP_WAVE1_SPAWN_GRACE + 10;
   let t = 0;
-  while (t < 12) {
+  while (t < span) {
     sim.update(dt, feet);
     t += dt;
   }
@@ -443,14 +490,14 @@ test("burst cadence holds at 5 fps and two drones stay under the scripted damage
       assert.ok(Math.abs(gap - WISP_BOLT_GAP) < 0.02, `5 fps bolt gap ${gap}`);
       if (i + 2 < bolts) {
         const burst = sim.boltTime(index, i + 2) - sim.boltTime(index, i + 1);
-        assert.ok(Math.abs(burst - WISP_BURST_GAP) < 0.02, `5 fps burst gap ${burst}`);
+        assert.ok(Math.abs(burst - WISP_WAVE1_BURST_GAP) < 0.02, `5 fps burst gap ${burst}`);
       }
     }
   }
   const dealt = 500 - player.get().hp;
-  const window = 12 - WISP_SPAWN_GRACE;
+  const window = span - WISP_WAVE1_SPAWN_GRACE;
   const perSecond = dealt / window;
-  const scripted = (2 * 2 * WISP_BOLT_DAMAGE) / (WISP_BOLT_GAP + WISP_BURST_GAP);
+  const scripted = (2 * 2 * WISP_BOLT_DAMAGE) / (WISP_BOLT_GAP + WISP_WAVE1_BURST_GAP);
   console.log(
     `wisp worst case ${scripted.toFixed(2)} HP/s if both drones hit every bolt; measured ${perSecond.toFixed(2)} HP/s over ${window.toFixed(1)} s (${dealt} HP)`,
   );
@@ -510,7 +557,7 @@ test("a single bolt applies damage once at 5, 30, and 120 fps", () => {
     let previousHp = player.get().hp;
     let previous = new Set();
     let t = 0;
-    while (t < 6) {
+    while (t < WISP_WAVE1_SPAWN_GRACE + 4) {
       sim.update(dt, feet);
       t += dt;
       const hp = player.get().hp;
@@ -540,7 +587,7 @@ test("a single bolt applies damage once at 5, 30, and 120 fps", () => {
     assert.equal(shot.hits, bySerial.size);
     assert.equal(shot.damageEvents, bySerial.size);
     assert.equal(500 - player.get().hp, bySerial.size * WISP_BOLT_DAMAGE);
-    assert.ok(shot.firstBolt >= WISP_SPAWN_GRACE, `first bolt ${shot.firstBolt} at dt ${dt}`);
+    assert.ok(shot.firstBolt >= WISP_WAVE1_SPAWN_GRACE, `first bolt ${shot.firstBolt} at dt ${dt}`);
     console.log(`bolt-once dt ${dt}: ${bySerial.size} bolts once each, hp ${player.get().hp}`);
   }
 });
