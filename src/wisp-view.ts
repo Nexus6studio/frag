@@ -1,7 +1,8 @@
 // WISP-4 view. A flat octahedral disc, a sensor slit, and pooled shots and scraps.
 // Nothing here is a loaded model. The disc spins so the cyan facets read as
 // running lights. The slit faces the player and turns red while the drone is
-// aggro. Death scraps and the oil droplets reuse one pool each.
+// aggro. Death is sparks, flat metal and plastic scraps, and dark oil droplets.
+// Those pools are fixed. The scraps are not limbs and the oil is not blood.
 
 import {
   AdditiveBlending,
@@ -123,7 +124,7 @@ export function mountWispView(scene: Scene, sim: WispSim, camera?: PerspectiveCa
   sparkPoints.visible = false;
 
   const gibMat = new MeshBasicMaterial({ color: 0xffffff, toneMapped: false, fog: false });
-  const gibs = instanced(tetraGeometry(), gibMat, WISP_GIB_CAP);
+  const gibs = instanced(shardGeometry(), gibMat, WISP_GIB_CAP);
   gibs.name = "wisp-gibs";
 
   const fluidMat = new MeshBasicMaterial({ color: WISP_FLUID_COLOR, toneMapped: false, fog: true });
@@ -334,6 +335,28 @@ function boltGeometry(): BufferGeometry {
     const face = faces[i]!;
     pushTri(position, color, face[0], face[1], face[2], white);
   }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(position, 3));
+  geometry.setAttribute("color", new Float32BufferAttribute(color, 3));
+  return geometry;
+}
+
+function shardGeometry(): BufferGeometry {
+  const position: number[] = [];
+  const color: number[] = [];
+  const white: [number, number, number] = [1, 1, 1];
+  const top: [number, number, number][] = [
+    [0.14, 0.006, 0.01],
+    [-0.09, 0.006, 0.08],
+    [-0.03, 0.006, -0.1],
+  ];
+  const bottom: [number, number, number][] = [
+    [0.14, -0.006, 0.01],
+    [-0.03, -0.006, -0.1],
+    [-0.09, -0.006, 0.08],
+  ];
+  pushTri(position, color, top[0]!, top[1]!, top[2]!, white);
+  pushTri(position, color, bottom[0]!, bottom[1]!, bottom[2]!, white);
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new Float32BufferAttribute(position, 3));
   geometry.setAttribute("color", new Float32BufferAttribute(color, 3));
