@@ -175,13 +175,13 @@ export function mountWispView(scene: Scene, sim: WispSim, camera?: PerspectiveCa
       show(bolts, boltCount);
 
       const sparkCount = packPoints(sparkPositions, sim.sparks);
-      sparkGeom.getAttribute("position").needsUpdate = true;
       sparkGeom.setDrawRange(0, sparkCount);
       sparkPoints.visible = sparkCount > 0;
+      if (sparkCount > 0) sparkGeom.getAttribute("position").needsUpdate = true;
 
       const gibCount = packParts(gibs, sim.gibs, 1, true);
       show(gibs, gibCount);
-      if (gibs.instanceColor) gibs.instanceColor.needsUpdate = true;
+      if (gibCount > 0 && gibs.instanceColor) gibs.instanceColor.needsUpdate = true;
       show(fluid, packParts(fluid, sim.fluid, 0.7, false));
     },
   };

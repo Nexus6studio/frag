@@ -182,7 +182,10 @@ const scratchHit: TraceHit = {
 const downFrom: Vec3 = { x: 0, y: 0, z: 0 };
 const downDir: Vec3 = { x: 0, y: -1, z: 0 };
 const shotTo: Vec3 = { x: 0, y: 0, z: 0 };
+const shotFrom: Vec3 = { x: 0, y: 0, z: 0 };
 const steer = { x: 0, z: 0 };
+const steerIntent = { forward: 0, strafe: 0, jump: false as const, yawDeg: 0, wishSpeed: 0 };
+const pathStack: number[] = [];
 
 const SPARK_DIR: readonly (readonly [number, number, number])[] = [
   [0.85, 0.7, 0.2],
@@ -338,7 +341,10 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
     shotTo.x = mx + tx;
     shotTo.y = my + ty;
     shotTo.z = mz + tz;
-    const blocked = traceSegment({ x: mx, y: my, z: mz }, shotTo, world, scratchHit);
+    shotFrom.x = mx;
+    shotFrom.y = my;
+    shotFrom.z = mz;
+    const blocked = traceSegment(shotFrom, shotTo, world, scratchHit);
     if (blocked && blocked.distance < dist - 0.35) return false;
     const armorBefore = player.get().armor;
     const hpBefore = player.get().hp;
@@ -525,13 +531,12 @@ function steerUnit(
     faceZ = -Math.cos(unit.yaw);
   }
   unit.yaw = Math.atan2(-faceX, -faceZ);
-  return {
-    forward,
-    strafe,
-    jump: false,
-    yawDeg: (unit.yaw * 180) / Math.PI,
-    wishSpeed: ENFORCER_SPEED,
-  };
+  steerIntent.forward = forward;
+  steerIntent.strafe = strafe;
+  steerIntent.jump = false;
+  steerIntent.yawDeg = (unit.yaw * 180) / Math.PI;
+  steerIntent.wishSpeed = ENFORCER_SPEED;
+  return steerIntent;
 }
 
 function remember(unit: Unit, feet: Vec3, hull: Hull): void {
@@ -555,7 +560,10 @@ function lineClear(unit: Unit, feet: Vec3, hull: Hull): boolean {
   shotTo.x = bx;
   shotTo.y = by;
   shotTo.z = bz;
-  const hit = traceSegment({ x: ax, y: ay, z: az }, shotTo, hull, scratchHit);
+  shotFrom.x = ax;
+  shotFrom.y = ay;
+  shotFrom.z = az;
+  const hit = traceSegment(shotFrom, shotTo, hull, scratchHit);
   return !hit || hit.distance >= dist - 0.4;
 }
 
@@ -711,9 +719,9 @@ function writePath(
       }
     }
   }
-  const stack: number[] = [];
-  for (let cursor = end; cursor >= 0; cursor = prev[cursor]!) stack.push(cursor);
-  for (let i = stack.length - 1; i >= 0; i -= 1) out.push(stack[i]!);
+  pathStack.length = 0;
+  for (let cursor = end; cursor >= 0; cursor = prev[cursor]!) pathStack.push(cursor);
+  for (let i = pathStack.length - 1; i >= 0; i -= 1) out.push(pathStack[i]!);
 }
 
 function buildNav(): { nodes: NavNode[] } {
