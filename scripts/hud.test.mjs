@@ -9,6 +9,7 @@ import {
   hudMode,
   hudReadout,
   recapAcceptsInput,
+  recapEnterAction,
 } from "../src/hud/model.ts";
 import { START_VITALS, createPlayerState, exposePlayerDebug } from "../src/player/state.ts";
 
@@ -164,6 +165,21 @@ test("the recap ignores input for one second", () => {
   assert.equal(recapAcceptsInput(0.99), false);
   assert.equal(recapAcceptsInput(1), true);
   assert.equal(recapAcceptsInput(1.2), true);
+});
+
+test("enter on pause does not bypass the recap when hp is 0", () => {
+  const dead = { code: "Enter", repeat: false, pauseResume: false, hp: 0, armed: false };
+  assert.equal(recapEnterAction({ ...dead, phase: "paused" }), "ignore");
+  assert.equal(recapEnterAction({ ...dead, phase: "playing" }), "swallow");
+  assert.equal(recapEnterAction({ ...dead, phase: "playing", armed: true, pauseResume: true }), "ignore");
+  assert.equal(recapEnterAction({ ...dead, phase: "paused", armed: true }), "ignore");
+  assert.equal(recapEnterAction({ ...dead, phase: "playing", armed: true }), "restart");
+  assert.equal(recapEnterAction({ ...dead, phase: "playing", hp: 40, armed: true }), "ignore");
+  assert.equal(recapEnterAction({ ...dead, code: "KeyE", phase: "playing", armed: true }), "ignore");
+
+  const source = fs.readFileSync(new URL("../src/hud/hud.ts", import.meta.url), "utf8").replace(/\s+/g, " ");
+  assert.match(source, /recapEnterAction\(\{[^}]*hp: player\.get\(\)\.hp/);
+  assert.match(source, /pauseResume: isPauseResume\(event\)/);
 });
 
 test("zero ammo shows an empty cue and a dry magazine shows reload", () => {

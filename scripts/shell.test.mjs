@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mountShell, unlockShouldPause } from "../src/shell.ts";
+import { recapEnterAction } from "../src/hud/model.ts";
+import { createPlayerState } from "../src/player/state.ts";
+import { isPauseResume, mountShell, unlockShouldPause } from "../src/shell.ts";
 
 test("a pointer-lock release pauses play unless that request is still in flight", () => {
   assert.equal(unlockShouldPause({ phase: "playing", requestOpen: true }), false);
@@ -105,8 +107,21 @@ function createHarness() {
     canvas,
     elements,
     key(code) {
-      const event = { code, repeat: false, target: null, preventDefault() {}, stopPropagation() {} };
-      for (const fn of keyListeners) fn(event);
+      const event = {
+        code,
+        repeat: false,
+        target: null,
+        stopped: false,
+        preventDefault() {},
+        stopPropagation() {},
+        stopImmediatePropagation() {
+          this.stopped = true;
+        },
+      };
+      for (const fn of keyListeners) {
+        fn(event);
+        if (event.stopped) break;
+      }
     },
     lockChange() {
       for (const fn of [...lockListeners]) fn();
@@ -216,6 +231,64 @@ test("a rejected pointer lock does not soft-lock resume", async (t) => {
   assert.equal(shell.phase, "playing");
   assert.equal(h.elements.get("pause").hidden, true);
   assert.equal(globalThis.document.pointerLockElement, null);
+});
+
+test("the fps readout stays hidden until Backquote or F1 during play", (t) => {
+  const h = createHarness();
+  t.after(() => h.restore());
+  h.elements.get("fps-readout").hidden = true;
+  const shell = play(h);
+  assert.equal(shell.debug, false);
+  assert.equal(h.elements.get("fps-readout").hidden, true);
+
+  h.key("Backquote");
+  assert.equal(shell.debug, true);
+  assert.equal(h.elements.get("fps-readout").hidden, false);
+
+  h.key("F1");
+  assert.equal(shell.debug, false);
+  assert.equal(h.elements.get("fps-readout").hidden, true);
+});
+
+test("enter on pause does not confirm death when hp is already 0", (t) => {
+  const h = createHarness();
+  t.after(() => h.restore());
+  const player = createPlayerState();
+  const shell = play(h);
+  let armed = false;
+  let restarts = 0;
+  // Registered after the shell, same order as the recap listener in main.
+  globalThis.window.addEventListener("keydown", (event) => {
+    if (
+      recapEnterAction({
+        code: event.code,
+        repeat: event.repeat,
+        pauseResume: isPauseResume(event),
+        hp: player.get().hp,
+        phase: shell.phase,
+        armed,
+      }) === "restart"
+    ) {
+      restarts += 1;
+    }
+  });
+
+  player.set({ hp: 0 });
+  h.key("Escape");
+  h.key("Enter");
+  assert.equal(shell.phase, "playing");
+  assert.equal(player.get().hp, 0);
+  assert.equal(restarts, 0, "enter during the recap lockout restarted");
+
+  h.key("Escape");
+  armed = true;
+  h.key("Enter");
+  assert.equal(shell.phase, "playing");
+  assert.equal(player.get().hp, 0);
+  assert.equal(restarts, 0, "enter on pause skipped the recap after the cooldown");
+
+  h.key("Enter");
+  assert.equal(restarts, 1, "an armed enter on the recap itself did not restart");
 });
 
 test("losing the pointer pauses even inside the first second, but not mid-request", async (t) => {

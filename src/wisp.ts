@@ -542,11 +542,10 @@ export function createWispSim(options: WispOptions): WispSim {
       strike(bolt);
       return;
     }
-    if (
-      blocked ||
-      bolt.age >= WISP_BOLT_LIFE - 1e-8 ||
-      !wispInsideVolume({ x: bolt.x, y: bolt.y, z: bolt.z }, 0)
-    ) {
+    boltFrom.x = bolt.x;
+    boltFrom.y = bolt.y;
+    boltFrom.z = bolt.z;
+    if (blocked || bolt.age >= WISP_BOLT_LIFE - 1e-8 || !wispInsideVolume(boltFrom, 0)) {
       bolt.alive = false;
     }
   }
