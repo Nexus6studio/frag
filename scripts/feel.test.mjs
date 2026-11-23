@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import {
   ARC_CAP,
@@ -10,6 +11,7 @@ import {
   VIEW_REST,
   arcAnchor,
   arcOpacity,
+  seatArcPeak,
   createCombatFeedback,
   damageBearing,
   freshMarker,
@@ -30,6 +32,76 @@ import { damagePlayer, subscribePlayerHurt } from "../src/player/hurt.ts";
 import { createPlayerState } from "../src/player/state.ts";
 
 const eye = { x: 0, y: 1.45, z: 0 };
+
+/** Distance from a viewport-fraction point to the nearest screen edge. 0 means on the edge. */
+function edgeGap(point) {
+  return Math.min(point.x, point.y, 1 - point.x, 1 - point.y);
+}
+
+const hudCss = fs.readFileSync(new URL("../src/hud/hud.css", import.meta.url), "utf8");
+
+function cssBlock(selector) {
+  const source = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = hudCss.match(new RegExp(`(?:^|\\n)${source}\\s*\\{([^}]+)\\}`));
+  assert.ok(match, `${selector} rule missing`);
+  return match[1];
+}
+
+function cssPx(block, prop) {
+  const match = block.match(new RegExp(`${prop}:\\s*(\\d+(?:\\.\\d+)?)px`));
+  assert.ok(match, `${prop} missing`);
+  return Number(match[1]);
+}
+
+function lineBox(block) {
+  const size = cssPx(block, "font-size");
+  const line = block.match(/line-height:\s*(\d+(?:\.\d+)?)/);
+  return size * (line ? Number(line[1]) : 1);
+}
+
+/** Laid-out #hud-bar from the stylesheet. Height comes from the stat metrics, not a fixed inset. */
+function hudBarPixels(view) {
+  const bar = cssBlock("#hud-bar");
+  const stat = cssBlock(".hud-stat");
+  const label = cssBlock(".hud-label");
+  const value = cssBlock(".hud-value");
+  const padding = stat.match(/padding:\s*(\d+(?:\.\d+)?)px\s+(\d+(?:\.\d+)?)px\s+(\d+(?:\.\d+)?)px/);
+  assert.ok(padding, "hud-stat padding missing");
+  const height = Number(padding[1]) + lineBox(label) + cssPx(label, "margin-bottom") + lineBox(value) + Number(padding[3]);
+  const bottom = cssPx(bar, "bottom");
+  return {
+    left: cssPx(bar, "left"),
+    right: view.width - cssPx(bar, "right"),
+    top: view.height - bottom - height,
+    bottom: view.height - bottom,
+  };
+}
+
+/** Laid-out #hud-wave from the stylesheet. "WAVE 1" is the live label. */
+function hudWavePixels(view) {
+  const wave = cssBlock("#hud-wave");
+  const padding = wave.match(/padding:\s*(\d+(?:\.\d+)?)px\s+(\d+(?:\.\d+)?)px/);
+  assert.ok(padding, "hud-wave padding missing");
+  const height = Number(padding[1]) * 2 + lineBox(wave);
+  const text = "WAVE 1";
+  const width = text.length * lineBox(wave) * 0.62 + Number(padding[2]) * 2;
+  const top = cssPx(wave, "top");
+  return {
+    left: (view.width - width) / 2,
+    right: (view.width + width) / 2,
+    top,
+    bottom: top + height,
+  };
+}
+
+function toFractions(rect, view) {
+  return {
+    left: rect.left / view.width,
+    top: rect.top / view.height,
+    right: rect.right / view.width,
+    bottom: rect.bottom / view.height,
+  };
+}
 
 test("a hit marker lasts 80 ms and a kill is a larger flash that a hit cannot downgrade", () => {
   let marker = noteMarker(freshMarker(), false);
@@ -85,8 +157,8 @@ test("off-center damage places the arc toward the attacker", () => {
   const aheadRight = damageBearing(0, eye, { x: 1, y: 1.45, z: -Math.sqrt(3) });
   assert.ok(Math.abs(aheadRight - Math.PI / 6) < 1e-6, `diagonal bearing ${aheadRight}`);
   const diagonal = arcAnchor(aheadRight);
-  assert.ok(diagonal.x > 0.5 && diagonal.x < 0.9, `diagonal x ${diagonal.x}`);
-  assert.ok(diagonal.y < 0.5 && diagonal.y > 0.05, `diagonal y ${diagonal.y}`);
+  assert.ok(diagonal.x > 0.5 && diagonal.y < 0.5, `diagonal stays ahead-right (${diagonal.x}, ${diagonal.y})`);
+  assert.ok(edgeGap(diagonal) <= 0.02, `diagonal arc floats inside the view (${diagonal.x}, ${diagonal.y})`);
 
   // Yaw -90 looks toward +X. A threat still on -Z is then to the left.
   const turned = damageBearing(-90, eye, { x: 8, y: 1.45, z: 0 });
@@ -96,6 +168,89 @@ test("off-center damage places the arc toward the attacker", () => {
   assert.ok(arcAnchor(flank).x < 0.1);
 
   assert.ok(Number.isNaN(damageBearing(0, eye, { x: 0.01, y: 4, z: 0 })));
+});
+
+test("the damage crescent's outer peak hugs the viewport edge", () => {
+  const bearings = [0, Math.PI / 2, -Math.PI / 2, Math.PI, Math.PI / 6, -Math.PI / 5, 1.15, 2.2, -2.2, 2.8];
+  for (const bearing of bearings) {
+    const arc = arcAnchor(bearing);
+    const gap = edgeGap(arc);
+    assert.ok(gap <= 0.02, `bearing ${bearing.toFixed(3)} sits inset by ${gap.toFixed(3)} at ${arc.x.toFixed(3)}, ${arc.y.toFixed(3)}`);
+    assert.ok(arc.x >= -1e-6 && arc.x <= 1 + 1e-6, `x left the viewport (${arc.x})`);
+    assert.ok(arc.y >= -1e-6 && arc.y <= 1 + 1e-6, `y left the viewport (${arc.y})`);
+    const reach = Math.hypot(arc.x - 0.5, arc.y - 0.5);
+    assert.ok(reach >= 0.5 - 1e-6, `bearing ${bearing.toFixed(3)} reach ${reach.toFixed(3)} stops short of the edge`);
+    const dx = arc.x - 0.5;
+    const dy = arc.y - 0.5;
+    const rayX = Math.sin(bearing);
+    const rayY = -Math.cos(bearing);
+    const cross = dx * rayY - dy * rayX;
+    assert.ok(Math.abs(cross) < 1e-6, `bearing ${bearing.toFixed(3)} left its ray (${cross})`);
+  }
+});
+
+test("the damage crescent is at least three times the old 4px stroke and hangs inward from its peak", () => {
+  const css = fs.readFileSync(new URL("../src/hud/hud.css", import.meta.url), "utf8");
+  const block = css.match(/\.damage-arc\s*\{([^}]+)\}/);
+  assert.ok(block, "damage-arc rule missing");
+  const border = block[1].match(/border:\s*(\d+(?:\.\d+)?)px/);
+  assert.ok(border, "damage-arc border thickness missing");
+  const thickness = Number(border[1]);
+  const previousThickness = 4;
+  assert.ok(
+    thickness >= previousThickness * 3,
+    `stroke is ${thickness}px, under ${previousThickness * 3}px (3x the previous arc)`,
+  );
+  assert.match(block[1], /transform-origin:\s*center top/, "crescent does not pivot on its outer peak");
+
+  const hud = fs.readFileSync(new URL("../src/hud/hud.ts", import.meta.url), "utf8");
+  assert.match(hud, /translate\(-50%, 0\) rotate/, "arc is still centered on the anchor instead of hanging inward from the edge");
+  assert.doesNotMatch(hud, /translate\(-50%, -50%\)/, "arc element is centered, so the ring floats inside the edge");
+});
+
+test("a rear arc peak sits on the HUD bar and does not overlap it", () => {
+  const view = { width: 1280, height: 720 };
+  const bar = hudBarPixels(view);
+  const obstacles = [toFractions(bar, view)];
+  const peak = seatArcPeak(arcAnchor(Math.PI), obstacles);
+  const x = peak.x * view.width;
+  const y = peak.y * view.height;
+  const overlaps = x > bar.left && x < bar.right && y > bar.top && y < bar.bottom;
+  assert.equal(overlaps, false, `rear peak ${x.toFixed(2)},${y.toFixed(2)} overlaps the bar`);
+  assert.ok(Math.abs(y - bar.top) <= 0.75, `rear peak y ${y.toFixed(2)} is not on the bar top ${bar.top}`);
+  assert.ok(Math.abs(x - view.width / 2) < 2, `rear peak x ${x.toFixed(2)} left the center`);
+
+  const side = seatArcPeak(arcAnchor(Math.PI / 2), obstacles);
+  assert.ok(side.x > 0.98, `the bar pulled a side peak off the edge (${side.x})`);
+
+  const wave = hudWavePixels(view);
+  const ahead = seatArcPeak(arcAnchor(0), [toFractions(wave, view)]);
+  const aheadY = ahead.y * view.height;
+  const aheadX = ahead.x * view.width;
+  const waveOverlap = aheadX > wave.left && aheadX < wave.right && aheadY > wave.top && aheadY < wave.bottom;
+  assert.equal(waveOverlap, false, `forward peak ${aheadX.toFixed(2)},${aheadY.toFixed(2)} overlaps the wave label`);
+  assert.ok(Math.abs(aheadY - wave.bottom) <= 0.75, `forward peak y ${aheadY.toFixed(2)} left the wave label`);
+});
+
+test("three stacked arcs stay on the opacity cap without raising it", () => {
+  assert.equal(ARC_OPACITY_BUDGET, 1.35);
+  assert.equal(ARC_CAP, 3);
+  assert.equal(ARC_LIFE_SECONDS, 0.4);
+
+  let arcs = pushDamage([], 0);
+  arcs = pushDamage(arcs, 1.2);
+  arcs = pushDamage(arcs, 2.4);
+  assert.equal(arcs.length, 3, "three separated hits did not keep three arcs");
+  const painted = paintDamage(arcs);
+  assert.equal(painted.length, 3);
+  let sum = 0;
+  for (const arc of painted) sum += arc.opacity;
+  assert.ok(Math.abs(sum - 1.35) < 1e-6, `three fresh arcs summed to ${sum}, cap is 1.35`);
+  assert.ok(painted.every((arc) => arc.opacity < 0.7), "stacked arcs were not dimmed under the cap");
+
+  const single = paintDamage(pushDamage([], 0.4));
+  assert.equal(single.length, 1);
+  assert.ok(single[0].opacity > painted[0].opacity, "a lone arc was dimmed like a stack");
 });
 
 test("overlapping damage arcs fade, merge, and stay under the opacity budget", () => {
