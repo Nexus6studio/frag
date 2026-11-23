@@ -268,17 +268,21 @@ function frame(time: number): void {
   lastSimDt = clampedFrameSeconds(lastTime, time, drop);
   lastTime = time;
   const simDt = lastSimDt;
-  simSeconds += simDt;
-  simFrames += 1;
-  const captured =
-    shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
+  const playing = shell.phase === "playing";
+  const pointerLocked = document.pointerLockElement === renderer.domElement;
+  // The sim clock follows play, not the pointer. Pause, the warning, and
+  // click-to-play must not advance it. A rejected lock still plays.
+  if (playing) {
+    simSeconds += simDt;
+    simFrames += 1;
+  }
   const living = player.get().hp > 0;
   // Dead, including the recap's first second, drops a click so it cannot fire
   // after the restart. Pause takes the same path through sample(false).
   if (!living) input.discard();
-  const controls = input.sample(captured);
-  if (captured && living) {
-    look.apply(controls.lookX, controls.lookY);
+  const controls = input.sample(playing && living);
+  if (playing && living) {
+    if (pointerLocked) look.apply(controls.lookX, controls.lookY);
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
     if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
     const intent = intentFromInput(controls, look.yaw);
@@ -291,7 +295,7 @@ function frame(time: number): void {
   const body = mover.state;
   syncPadViews(atrium.pads, pickups.pads);
   camera.position.set(body.position.x, body.position.y + EYE_HEIGHT, body.position.z);
-  if (captured && living) {
+  if (playing && living) {
     aimDirection(look.yaw, look.pitch, aim);
     muzzleOrigin(camera.position, aim, muzzle);
     // `firePresses` is the clicks that already went up. Held fire stays on `down`.
@@ -299,9 +303,9 @@ function frame(time: number): void {
     quillCommand.presses = controls.firePresses;
     quillCommand.reload = controls.pressed.reload;
     quill.update(simDt, quillCommand);
-    // Grace, bursts, and bolts run only while the pointer is locked in play.
-    // The warning, click-to-play, and pause must not burn the 2 s grace or
-    // leave a burst to land on resume.
+    // Grace, bursts, and bolts run whenever play is running, even if the
+    // pointer lock was rejected. The warning, click-to-play, and pause must
+    // not burn the 2 s grace or leave a burst to land on resume.
     wisps.update(simDt, body.position);
   }
   hud.setWave(wisps.wave);
