@@ -37,6 +37,8 @@ export interface DebugPose {
 
 export function mountShell(canvas: HTMLCanvasElement): {
   readonly phase: Phase;
+  /** True while the FPS readout (and the dev target volume) is showing. */
+  readonly debug: boolean;
   onFrame(time: number, pose?: DebugPose): void;
 } {
   const root = required<HTMLElement>("#app-shell");
@@ -191,6 +193,9 @@ export function mountShell(canvas: HTMLCanvasElement): {
   return {
     get phase() {
       return phase;
+    },
+    get debug() {
+      return showFps;
     },
     onFrame(time: number, pose?: DebugPose): void {
       if (lastTime !== 0) {

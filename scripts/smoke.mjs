@@ -203,6 +203,72 @@ async function hudMode(page) {
 
 // Warning, then acknowledge, then click-to-play. Pointer lock may be denied
 // headless, so this asserts overlay phases rather than document.pointerLockElement.
+async function dispatchMouse(page, type) {
+  await page.evaluate((eventType) => {
+    window.dispatchEvent(
+      new MouseEvent(eventType, { button: 0, buttons: eventType === "mousedown" ? 1 : 0, bubbles: true }),
+    );
+  }, type);
+}
+
+async function assertQuillFire(page, errors) {
+  const ammoText = () => page.locator("#hud-ammo").innerText();
+  const before = (await ammoText()).trim();
+  if (before !== "40+40") errors.push(`ammo before fire is ${before}`);
+  await dispatchMouse(page, "mousedown");
+  let stats = null;
+  try {
+    await page.waitForFunction(
+      () => {
+        const mag = Number((document.querySelector("#hud-ammo")?.textContent ?? "").split("+")[0]);
+        return Number.isFinite(mag) && mag <= 34;
+      },
+      undefined,
+      { timeout: 15_000, polling: 50 },
+    );
+    stats = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      if (!(canvas instanceof HTMLCanvasElement) || canvas.fragStats == null) return { error: "fragStats missing" };
+      return canvas.fragStats;
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`holding fire did not drop ammo from 40 (now ${await ammoText()}): ${message}`);
+  } finally {
+    await dispatchMouse(page, "mouseup");
+  }
+  const mid = (await ammoText()).trim();
+  const mag = Number(mid.split("+")[0]);
+  if (!(mag < 40)) errors.push(`ammo digits did not drop from 40 (now ${mid})`);
+  await page.keyboard.press("KeyR");
+  try {
+    await page.waitForFunction(
+      (previous) => {
+        const text = document.querySelector("#hud-ammo")?.textContent ?? "";
+        return text.startsWith("40+") && text !== previous;
+      },
+      mid,
+      { timeout: 15_000, polling: 50 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`reload did not refill the magazine (now ${await ammoText()}): ${message}`);
+  }
+  if (stats && !stats.error) {
+    if (!(stats.calls > 0 && stats.calls <= 80)) {
+      errors.push(`renderer draw calls during fire ${stats.calls} outside 1..80`);
+    }
+    if (!(stats.triangles > 0 && stats.triangles <= 50_000)) {
+      errors.push(`renderer triangles during fire ${stats.triangles} outside 1..50000`);
+    }
+    console.log(
+      `renderer.info during fire: calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}`,
+    );
+  } else if (stats?.error) {
+    errors.push(stats.error);
+  }
+}
+
 async function assertShellFlow(page, errors) {
   const lockHeld = () => page.evaluate(() => document.pointerLockElement != null);
 
@@ -424,6 +490,8 @@ async function assertShellFlow(page, errors) {
     }
   }
 
+  await assertQuillFire(page, errors);
+
   await page.keyboard.press("F1");
   if (await page.locator("#fps-readout").evaluate((el) => !el.hidden)) {
     errors.push("f1 did not hide the fps readout");
@@ -629,7 +697,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> pause -> resume -> reload, readable type at 480p, 720p, and 1080p, no console warnings outside the allowlist`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / hidden armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> pause -> resume -> reload, readable type at 480p, 720p, and 1080p, no console warnings outside the allowlist`,
       );
     }
   } finally {

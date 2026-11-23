@@ -28,6 +28,8 @@ import {
   intentFromInput,
   planarSpeedOf,
 } from "./move";
+import { aimDirection, createQuill, muzzleOrigin } from "./quill.ts";
+import { mountQuillView } from "./quill-view.ts";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
 
@@ -67,6 +69,21 @@ camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z)
 camera.rotation.order = "YXZ";
 camera.lookAt(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z - 1);
 const look = createLook(camera);
+const quill = createQuill({ hull, player });
+const debugTarget = import.meta.env.DEV
+  ? {
+      center: {
+        x: ATRIUM_SPAWN.x,
+        y: ATRIUM_SPAWN.y + EYE_HEIGHT,
+        z: ATRIUM_SPAWN.z - 10,
+      },
+      radius: 0.35,
+    }
+  : null;
+const quillView = mountQuillView(scene, camera, quill, debugTarget);
+const aim = { x: 0, y: 0, z: -1 };
+const muzzle = { x: 0, y: 0, z: 0 };
+const quillCommand = { fire: false, reload: false, origin: muzzle, direction: aim };
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -84,9 +101,12 @@ Object.defineProperty(renderer.domElement, "fragStats", {
   configurable: true,
   enumerable: false,
   get() {
+    const render = renderer.info.render;
     return {
-      calls: renderer.info.render.calls,
-      triangles: renderer.info.render.triangles,
+      calls: render.calls,
+      triangles: render.triangles,
+      lines: render.lines,
+      points: render.points,
     };
   },
 });
@@ -110,8 +130,10 @@ let lastTime = 0;
 
 function frame(time: number): void {
   // The mover clamps a stall at 250 ms and keeps the sub-step remainder.
+  // The Quill Driver sees that same clamped slice, not the raw stall.
   const frameDt = lastTime === 0 ? 0 : Math.max(0, (time - lastTime) / 1000);
   lastTime = time;
+  const simDt = Math.min(frameDt, MAX_FRAME_SECONDS);
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
   const controls = input.sample(captured);
@@ -120,14 +142,23 @@ function frame(time: number): void {
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
     if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
     const intent = intentFromInput(controls, look.yaw);
-    mover.advance(Math.min(frameDt, MAX_FRAME_SECONDS), intent);
+    mover.advance(simDt, intent);
     if (needsRespawn(mover.state.position)) {
       mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
     }
   }
   const body = mover.state;
   camera.position.set(body.position.x, body.position.y + EYE_HEIGHT, body.position.z);
-  // Fire and reload stay on `controls` for a later ticket.
+  if (captured) {
+    aimDirection(look.yaw, look.pitch, aim);
+    muzzleOrigin(camera.position, aim, muzzle);
+    quillCommand.fire = controls.down.fire;
+    quillCommand.reload = controls.pressed.reload;
+    quill.update(simDt, quillCommand);
+  }
+  look.setViewPunch(quill.punchDeg);
+  quillView.setDebugVisible(shell.debug);
+  quillView.sync();
   shell.onFrame(time, {
     x: camera.position.x,
     y: camera.position.y,
