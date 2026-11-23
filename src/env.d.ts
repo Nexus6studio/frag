@@ -1,3 +1,5 @@
+declare const __FRAG_BUILD__: string;
+
 declare module "*.css";
 
 interface ImportMetaEnv {

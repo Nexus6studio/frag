@@ -92,11 +92,11 @@ html[data-cursor="none"] canvas {
 .hud-label {
   display: block;
   margin-bottom: 4px;
-  /* Cap height of a 12px em is about 8px of ink, which is what read as 6–8px.
-     18px bold keeps the rendered capitals at or above 12px. #f7f8ff on #14151c
-     is about 17:1. */
+  /* The figures are 40px. 24px bold is 60% of that, so the laid-out capitals
+     stay at least half as tall as the numbers and above 12px. #f7f8ff on
+     #14151c is about 17:1. */
   color: #f7f8ff;
-  font-size: 18px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: 0.08em;
   line-height: 1;

@@ -105,6 +105,8 @@ function restartRun(): void {
   });
   mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
   camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z);
+  look.reset();
+  input.clearLook();
   shell.holdLock();
 }
 
@@ -290,6 +292,9 @@ function frame(time: number): void {
     quillCommand.fire = controls.down.fire;
     quillCommand.reload = controls.pressed.reload;
     quill.update(simDt, quillCommand);
+    // Grace, bursts, and bolts run only while the pointer is locked in play.
+    // The warning, click-to-play, and pause must not burn the 2 s grace or
+    // leave a burst to land on resume.
     wisps.update(simDt, body.position);
   }
   hud.setWave(wisps.wave);

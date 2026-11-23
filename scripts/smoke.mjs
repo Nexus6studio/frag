@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import fs from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -106,6 +105,23 @@ const WARNING_TITLE = "Content warning";
 const WARNING_BODY =
   "Contains fast-paced combat against robotic enemies, with explosions, sparks and debris. Includes flashing lights and rapid motion.";
 
+function expectedBuildId() {
+  const env = process.env.GITHUB_SHA?.trim() ?? "";
+  if (/^[0-9a-f]{7,40}$/i.test(env)) return env.toLowerCase().slice(0, 7);
+  try {
+    return execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .trim()
+      .toLowerCase()
+      .slice(0, 7);
+  } catch {
+    return "dev";
+  }
+}
+
 function horizontalFov(verticalDeg, aspect) {
   const vertical = (verticalDeg * Math.PI) / 180;
   return (2 * Math.atan(Math.tan(vertical / 2) * aspect) * 180) / Math.PI;
@@ -207,6 +223,8 @@ async function assertWarningCopy(page, errors, label) {
       title: title?.textContent ?? "",
       body: body?.textContent ?? "",
       button: button?.textContent ?? "",
+      hash: document.querySelector("#build-hash")?.textContent ?? "",
+      hashPx: px(document.querySelector("#build-hash")),
       eyebrow: document.querySelector("#content-warning .eyebrow") !== null,
       titlePx: px(title),
       bodyPx: px(body),
@@ -225,6 +243,16 @@ async function assertWarningCopy(page, errors, label) {
   }
   if (measured.button.trim() !== "Continue") {
     errors.push(`${label}: warning button is ${JSON.stringify(measured.button)}`);
+  }
+  const buildId = expectedBuildId();
+  if (measured.hash !== `build ${buildId}`) {
+    errors.push(`${label}: build id is ${JSON.stringify(measured.hash)}, expected build ${buildId}`);
+  }
+  if (!(measured.hashPx > 0) || measured.hashPx > 14) {
+    errors.push(`${label}: build id is ${measured.hashPx}px`);
+  }
+  if (measured.body.includes(buildId)) {
+    errors.push(`${label}: build id was written into the warning body`);
   }
   if (measured.eyebrow) errors.push(`${label}: content warning eyebrow is still shown`);
   if (!(measured.titlePx >= 16)) errors.push(`${label}: warning title is ${measured.titlePx}px`);
@@ -502,6 +530,52 @@ async function assertReadableType(page, errors, label) {
   }
 }
 
+async function assertLabelGlyphs(page, errors) {
+  const measured = await page.evaluate(() => {
+    const box = (selector) => {
+      const el = document.querySelector(selector);
+      if (!(el instanceof HTMLElement) || el.firstChild === null) return null;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rect = range.getBoundingClientRect();
+      return {
+        text: el.textContent ?? "",
+        height: rect.height,
+        css: Number.parseFloat(getComputedStyle(el).fontSize),
+      };
+    };
+    return {
+      hp: box("#hud-hp-stat .hud-label"),
+      ammo: box("#hud-ammo-stat .hud-label"),
+      hpValue: box("#hud-hp"),
+      ammoValue: box("#hud-ammo"),
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+  });
+  console.log(
+    `label glyphs at ${measured.width}x${measured.height}: HP ${measured.hp?.height ?? "missing"}px (css ${measured.hp?.css ?? "?"}px) vs number ${measured.hpValue?.height ?? "?"}px, AMMO ${measured.ammo?.height ?? "missing"}px (css ${measured.ammo?.css ?? "?"}px) vs number ${measured.ammoValue?.height ?? "?"}px`,
+  );
+  if (measured.width !== 1280 || measured.height !== 800) {
+    errors.push(`label glyphs measured at ${measured.width}x${measured.height}, expected 1280x800`);
+  }
+  for (const label of [measured.hp, measured.ammo]) {
+    if (!label || !(label.height >= 12)) {
+      errors.push(`label ${label?.text ?? "missing"} text box is ${label?.height ?? "missing"}px`);
+    }
+  }
+  if (!measured.hp || !measured.hpValue || !(measured.hp.height >= measured.hpValue.height * 0.5)) {
+    errors.push(
+      `HP label ${measured.hp?.height ?? "?"}px is under half of the number ${measured.hpValue?.height ?? "?"}px`,
+    );
+  }
+  if (!measured.ammo || !measured.ammoValue || !(measured.ammo.height >= measured.ammoValue.height * 0.5)) {
+    errors.push(
+      `AMMO label ${measured.ammo?.height ?? "?"}px is under half of the number ${measured.ammoValue?.height ?? "?"}px`,
+    );
+  }
+}
+
 async function hudMode(page) {
   return page.locator("#hud").evaluate((el) => el.getAttribute("data-mode"));
 }
@@ -728,6 +802,44 @@ async function assertShellFlow(page, errors) {
     if (readout.debug) errors.push("player debug hook is active in the production build");
     if (readout.barFromBottom < 0 || readout.barFromBottom > 48 || !readout.hpOnLeft || !readout.ammoOnRight) {
       errors.push("hud is not along the bottom corners");
+    }
+  }
+
+  const recapHit = await page.evaluate(() => {
+    const death = document.querySelector("#death-recap");
+    const style = death instanceof HTMLElement ? getComputedStyle(death) : null;
+    const points = [
+      [window.innerWidth / 2, window.innerHeight / 2],
+      [1, 1],
+      [window.innerWidth - 2, 2],
+      [2, window.innerHeight - 2],
+      [window.innerWidth - 2, window.innerHeight - 2],
+    ];
+    return {
+      display: style?.display ?? "",
+      pointerEvents: style?.pointerEvents ?? "",
+      hidden: death instanceof HTMLElement ? death.hidden : null,
+      aria: death?.getAttribute("aria-hidden") ?? "",
+      inert: death instanceof HTMLElement ? death.inert : null,
+      hits: points.map(([x, y]) => {
+        const el = document.elementFromPoint(x, y);
+        return {
+          id: el?.id ?? "",
+          tag: el?.tagName ?? "",
+          recap: el === death || (death instanceof HTMLElement && death.contains(el)),
+        };
+      }),
+    };
+  });
+  if (recapHit.display !== "none" || recapHit.hidden !== true || recapHit.inert !== true) {
+    errors.push(`recap stays in play (${JSON.stringify(recapHit)})`);
+  }
+  if (recapHit.pointerEvents !== "none" || recapHit.aria !== "true") {
+    errors.push(`recap can take play input (${recapHit.pointerEvents}, aria ${recapHit.aria})`);
+  }
+  for (const hit of recapHit.hits) {
+    if (hit.recap || hit.id === "death-recap") {
+      errors.push(`recap is the hit target at play (${hit.tag}#${hit.id})`);
     }
   }
 
@@ -995,6 +1107,57 @@ async function runDevSmoke(browser, errors) {
       errors.push(`warning returned after restart from a paused death (${afterRace.phase})`);
     }
     if (afterRace.phase === "paused") await page.locator("#pause").click();
+    try {
+      await page.waitForFunction(() => document.pointerLockElement != null, undefined, {
+        timeout: 4_000,
+        polling: 50,
+      });
+    } catch {
+      await page.locator("canvas").click({ force: true });
+    }
+
+    const pitched = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      return canvas instanceof HTMLCanvasElement ? { yaw: canvas.fragView?.yaw, pitch: canvas.fragView?.pitch } : null;
+    });
+    const session = await page.context().newCDPSession(page);
+    await session.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: 640,
+      y: 400,
+      movementX: 80,
+      movementY: -400,
+    });
+    await session.detach();
+    let looked = null;
+    try {
+      await page.waitForFunction(
+        () => {
+          const canvas = document.querySelector("canvas");
+          if (!(canvas instanceof HTMLCanvasElement) || canvas.fragView == null) return false;
+          return Math.abs(canvas.fragView.pitch) > 15 || Math.abs(canvas.fragView.yaw) > 5;
+        },
+        undefined,
+        { timeout: 3_000, polling: 50 },
+      );
+      looked = await page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        return canvas instanceof HTMLCanvasElement
+          ? { yaw: canvas.fragView?.yaw ?? null, pitch: canvas.fragView?.pitch ?? null }
+          : null;
+      });
+    } catch {
+      looked = await page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        return canvas instanceof HTMLCanvasElement
+          ? { yaw: canvas.fragView?.yaw ?? null, pitch: canvas.fragView?.pitch ?? null }
+          : null;
+      });
+    }
+    console.log(`restart facing before death: spawn ${JSON.stringify(pitched)} looked ${JSON.stringify(looked)}`);
+    if (!looked || !(Math.abs(looked.pitch ?? 0) > 15 || Math.abs(looked.yaw ?? 0) > 5)) {
+      errors.push(`mouse did not leave spawn facing before restart (${JSON.stringify(looked)})`);
+    }
 
     await page.evaluate(() => window.__fragDamage(500));
     try {
@@ -1052,6 +1215,10 @@ async function runDevSmoke(browser, errors) {
         wavesCleared: run?.wavesCleared,
         phaseRun: run?.phase,
         stored: Object.keys(localStorage),
+        yaw: canvas instanceof HTMLCanvasElement ? canvas.fragView?.yaw : null,
+        pitch: canvas instanceof HTMLCanvasElement ? canvas.fragView?.pitch : null,
+        vx: canvas instanceof HTMLCanvasElement ? canvas.fragPose?.vx : null,
+        vz: canvas instanceof HTMLCanvasElement ? canvas.fragPose?.vz : null,
       };
     });
     if (restarted.hp !== "100") errors.push(`dev restart hp is ${restarted.hp}`);
@@ -1070,6 +1237,12 @@ async function runDevSmoke(browser, errors) {
     }
     if (restarted.stored.length > 0) {
       errors.push(`dev localStorage was written: ${restarted.stored.join(", ")}`);
+    }
+    if (!(Math.abs(restarted.yaw ?? 99) < 1) || !(Math.abs(restarted.pitch ?? 99) < 1)) {
+      errors.push(`restart kept the old facing yaw ${restarted.yaw} pitch ${restarted.pitch}`);
+    }
+    if (restarted.vx !== 0 || restarted.vz !== 0) {
+      errors.push(`restart kept velocity ${restarted.vx}, ${restarted.vz}`);
     }
 
     if (restarted.phase === "paused") await page.locator("#pause").click();
@@ -1198,6 +1371,125 @@ async function readFire(page) {
       mouseDownDetails: (window.__fireListenerDetails ?? []).filter((row) => row.id === "window" && row.type === "mousedown"),
     };
   });
+}
+
+function installSlowFrames(page) {
+  return page.addInitScript(() => {
+    const native = window.requestAnimationFrame.bind(window);
+    let last = 0;
+    window.requestAnimationFrame = (callback) =>
+      native((time) => {
+        if (last !== 0 && time - last < 200) {
+          window.requestAnimationFrame(callback);
+          return;
+        }
+        last = time;
+        callback(time);
+      });
+  });
+}
+
+async function readFight(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    const drones = canvas instanceof HTMLCanvasElement ? canvas.fragDrones : null;
+    return {
+      hp: document.querySelector("#hud-hp")?.textContent ?? "",
+      time: drones?.time ?? null,
+      fired: drones?.fired ?? null,
+      hits: drones?.hits ?? null,
+      damageEvents: drones?.damageEvents ?? null,
+      firstBolt: drones?.firstBolt ?? null,
+      live: drones?.bolts ?? null,
+      phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+    };
+  });
+}
+
+async function assertStationaryDamage(browser, errors) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  page.on("pageerror", (error) => {
+    errors.push(`damage probe pageerror: ${error.message}`);
+  });
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`damage probe console: ${message.text()}`);
+  });
+  try {
+    await installSlowFrames(page);
+    await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector("canvas", { timeout: 10_000 });
+    await page.locator("#content-warning-continue").click();
+    await page.locator("#click-to-play").click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#hud")?.getAttribute("data-mode") === "play" && document.pointerLockElement != null,
+      undefined,
+      { timeout: 8_000, polling: 50 },
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(
+      () => document.querySelector("#app-shell")?.getAttribute("data-phase") === "paused",
+      undefined,
+      { timeout: 3_000 },
+    );
+    const frozen = await readFight(page);
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    const held = await readFight(page);
+    console.log(`paused drones: ${JSON.stringify(frozen)} -> ${JSON.stringify(held)}`);
+    if (held.time !== frozen.time || held.fired !== frozen.fired || held.hits !== frozen.hits) {
+      errors.push(`drones kept simulating while paused (${JSON.stringify(frozen)} -> ${JSON.stringify(held)})`);
+    }
+    await page.locator("#pause").click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#hud")?.getAttribute("data-mode") === "play" && document.pointerLockElement != null,
+      undefined,
+      { timeout: 8_000, polling: 50 },
+    );
+    await page.evaluate(() => {
+      window.__graceOk = true;
+    });
+    try {
+      await page.waitForFunction(
+        () => {
+          const canvas = document.querySelector("canvas");
+          const drones = canvas instanceof HTMLCanvasElement ? canvas.fragDrones : null;
+          if (!drones) return false;
+          if (drones.time < 2 && drones.fired !== 0) window.__graceOk = false;
+          return drones.time >= 10;
+        },
+        undefined,
+        { timeout: 25_000, polling: 50 },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      const snap = await readFight(page);
+      errors.push(`stationary fight did not reach 10 s sim (${JSON.stringify(snap)}): ${message}`);
+      return;
+    }
+    const report = await readFight(page);
+    const graceOk = await page.evaluate(() => window.__graceOk !== false);
+    const loss = Number(frozen.hp) - Number(report.hp);
+    const cadence = (2 * 2 * 8) / (0.15 + 1.8);
+    console.log(
+      `stationary 200 ms frames: hp ${frozen.hp} -> ${report.hp} (${loss} HP), fired ${report.fired}, hits ${report.hits}, damage events ${report.damageEvents}, first bolt ${report.firstBolt}, sim ${report.time}, live bolts ${report.live}, cadence max ${cadence.toFixed(2)} HP/s`,
+    );
+    if (!graceOk || !(report.firstBolt >= 2)) {
+      errors.push(`a drone fired during spawn grace (first ${report.firstBolt}, graceOk ${graceOk})`);
+    }
+    if (report.hits !== 8 || report.damageEvents !== 8) {
+      errors.push(`bolts that hit ${report.hits}, damage events ${report.damageEvents}, expected 8 each`);
+    }
+    if (loss !== 64) errors.push(`HP loss ${loss} over the 10 s window (hp ${report.hp})`);
+    if (!(loss <= cadence * 10 + 1e-6)) {
+      errors.push(`HP loss ${loss} exceeded the cadence maximum ${(cadence * 10).toFixed(2)}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`stationary damage probe failed: ${message}`);
+  } finally {
+    await page.close();
+  }
 }
 
 async function assertThrottledFire(browser, errors) {
@@ -1387,6 +1679,7 @@ try {
         }),
     );
     await assertReadableType(page, errors, "1280x800");
+    await assertLabelGlyphs(page, errors);
     await assertCanvasAspect(page, errors, "after resize 1280x800");
 
     await page.setViewportSize({ width: 1920, height: 1080 });
@@ -1427,12 +1720,9 @@ try {
       }
     }
 
-    const shotDir = path.join(root, "test-results");
-    fs.mkdirSync(shotDir, { recursive: true });
-    const shot = path.join(shotDir, "atrium-smoke.png");
-    await page.screenshot({ path: shot });
-    const artifacts = "/opt/cursor/artifacts";
-    if (fs.existsSync(artifacts)) fs.copyFileSync(shot, path.join(artifacts, "atrium-smoke.png"));
+    // No page.screenshot here. On software GL the bloom frame occupies the
+    // compositor, and Playwright's capture waits for that frame until it times out.
+    // The pixels are already checked by the canvas sample above.
 
     await page.setViewportSize({ width: 900, height: 700 });
     await page.evaluate(
@@ -1457,6 +1747,7 @@ try {
     await assertHiddenTabDoesNotSpike(page, errors);
     await assertLongRun(page, errors);
     await assertContextLoss(page, errors);
+    await assertStationaryDamage(browser, errors);
     await assertThrottledFire(browser, errors);
 
     await runDevSmoke(browser, errors);

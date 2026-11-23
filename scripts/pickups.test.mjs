@@ -57,7 +57,18 @@ function fakeHud() {
     armor: { textContent: null },
     ammo: { textContent: null },
     armorStat,
-    death: { hidden: true },
+    death: {
+      hidden: true,
+      inert: false,
+      style: { display: "", pointerEvents: "" },
+      attrs: {},
+      setAttribute(name, value) {
+        this.attrs[name] = value;
+      },
+      removeAttribute(name) {
+        delete this.attrs[name];
+      },
+    },
   };
 }
 

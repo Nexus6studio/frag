@@ -30,7 +30,18 @@ function fakeHud() {
     armor: { textContent: null },
     ammo: { textContent: null },
     armorStat,
-    death: { hidden: true },
+    death: {
+      hidden: true,
+      inert: false,
+      style: { display: "", pointerEvents: "" },
+      attrs: {},
+      setAttribute(name, value) {
+        this.attrs[name] = value;
+      },
+      removeAttribute(name) {
+        delete this.attrs[name];
+      },
+    },
   };
 }
 
@@ -82,6 +93,10 @@ test("hud readout follows player state and keeps armor hidden", () => {
   assert.equal(els.armorStat.attrs["aria-hidden"], "true");
   assert.equal(els.root.dataset.mode, "play");
   assert.equal(els.death.hidden, true);
+  assert.equal(els.death.inert, true);
+  assert.equal(els.death.style.display, "none");
+  assert.equal(els.death.style.pointerEvents, "none");
+  assert.equal(els.death.attrs["aria-hidden"], "true");
 
   player.set({ hp: 73, armor: 15, mag: 10, reserve: 5 });
   assert.equal(els.hp.textContent, "73");
@@ -106,6 +121,10 @@ test("hud readout follows player state and keeps armor hidden", () => {
   player.set({ hp: 0 });
   assert.equal(els.root.dataset.mode, "dead");
   assert.equal(els.death.hidden, false);
+  assert.equal(els.death.inert, false);
+  assert.equal(els.death.style.display, "");
+  assert.equal(els.death.style.pointerEvents, "auto");
+  assert.equal(els.death.attrs["aria-hidden"], undefined);
   assert.equal(els.hp.textContent, "0");
 
   phase = "paused";
