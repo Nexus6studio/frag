@@ -89,6 +89,12 @@ export interface MoveIntent {
   jump: boolean;
   /** Degrees. Zero looks toward -Z, and positive yaw looks toward -X. */
   yawDeg: number;
+  /**
+   * Ground and air wish, meters per second. Omitted keeps the player speeds.
+   * The enforcer passes 4.2 so the same step, ramp, and stair response can
+   * cruise slower than the player without a second collider.
+   */
+  wishSpeed?: number;
 }
 
 export interface BoxSolid {
@@ -162,6 +168,9 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
   if (!(dt > 0)) return cloneState(state);
 
   const wish = wishDirection(intent.yawDeg, intent.forward, intent.strafe);
+  const groundWish =
+    intent.wishSpeed !== undefined && intent.wishSpeed > 0 ? intent.wishSpeed : GROUND_WISH_SPEED;
+  const airWish = intent.wishSpeed !== undefined && intent.wishSpeed > 0 ? intent.wishSpeed : AIR_WISH_SPEED;
   let vx = state.velocity.x;
   let vy = state.velocity.y;
   let vz = state.velocity.z;
@@ -180,7 +189,7 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
   if (startedGrounded) {
     if (!grace) {
       if (steered) {
-        const bled = bleedUncommanded(vx, vz, steered, GROUND_WISH_SPEED, dt);
+        const bled = bleedUncommanded(vx, vz, steered, groundWish, dt);
         vx = bled.x;
         vz = bled.z;
       } else {
@@ -190,7 +199,7 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
       }
     }
     if (steered) {
-      const sped = accelerate(vx, vz, steered, GROUND_WISH_SPEED, GROUND_ACCEL, dt);
+      const sped = accelerate(vx, vz, steered, groundWish, GROUND_ACCEL, dt);
       vx = sped.x;
       vz = sped.z;
     }
@@ -200,7 +209,7 @@ export function stepMovement(state: MoveState, intent: MoveIntent, dt: number, h
     vy = intent.jump ? JUMP_SPEED : 0;
   } else {
     if (wish) {
-      const sped = accelerate(vx, vz, wish, AIR_WISH_SPEED, AIR_ACCEL, dt);
+      const sped = accelerate(vx, vz, wish, airWish, AIR_ACCEL, dt);
       vx = sped.x;
       vz = sped.z;
     }

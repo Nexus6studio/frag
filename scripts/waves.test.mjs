@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ATRIUM_SPAWN, createAtriumHull } from "../src/atrium.ts";
 import { restartCombat } from "../src/combat.ts";
+import { createFight } from "../src/fight.ts";
 import { createHitboxWorld } from "../src/hitbox.ts";
 import { deathRecapText } from "../src/hud/model.ts";
 import { createMoveState } from "../src/move.ts";
@@ -62,7 +63,7 @@ function clearIntoNext(sim, feet) {
 }
 
 test("wave composition caps drones at 4 and enforcers at 2", () => {
-  assert.equal(ENFORCER_ENABLED, false);
+  assert.equal(ENFORCER_ENABLED, true);
   assert.deepEqual(waveComposition(1), { drones: 2, enforcers: 1 });
   assert.deepEqual(waveComposition(2), { drones: 3, enforcers: 1 });
   assert.deepEqual(waveComposition(3), { drones: 4, enforcers: 2 });
@@ -127,6 +128,7 @@ test("flag off clears 2, 3, 4, 4, 4 drones with a two second gap and no win", ()
     player,
     hitboxes: createHitboxWorld(),
     origin: ATRIUM_SPAWN,
+    enforcersEnabled: false,
   });
   const pool = sim.drones;
   const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
@@ -159,33 +161,62 @@ test("flag off clears 2, 3, 4, 4, 4 drones with a two second gap and no win", ()
   assert.ok(sim.wave >= 5);
 });
 
-test("flag on plans 2+1, 3+1, 4+2, 4+2 and still caps live drones at 4", () => {
+test("live waves are 2+1, 3+1, 4+2, 4+2 and cap at 6", () => {
   const hull = createAtriumHull();
-  const player = createPlayerState();
-  const sim = createWispSim({
+  const player = createPlayerState({ hp: 500 });
+  const fight = createFight({
     hull,
     player,
     hitboxes: createHitboxWorld(),
     origin: ATRIUM_SPAWN,
-    enforcersEnabled: true,
   });
   const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
   const seen = [];
+  let maxAlive = 0;
   for (let i = 0; i < 4; i += 1) {
-    seen.push({ drones: sim.aliveCount(), enforcers: sim.enforcers });
-    assert.ok(sim.aliveCount() <= DRONE_CAP);
-    assert.ok(sim.enforcers <= ENFORCER_CAP);
-    assertSpawns(sim, hull, feet);
-    if (i < 3) clearIntoNext(sim, feet);
+    const drones = fight.wisps.aliveCount();
+    const enforcers = fight.enforcers.aliveCount();
+    maxAlive = Math.max(maxAlive, drones + enforcers);
+    seen.push({ drones, enforcers });
+    assert.ok(drones <= DRONE_CAP);
+    assert.ok(enforcers <= ENFORCER_CAP);
+    assert.ok(drones + enforcers <= DRONE_CAP + ENFORCER_CAP);
+    assertSpawns(fight.wisps, hull, feet);
+    for (const unit of fight.enforcers.units) {
+      if (!unit.alive) continue;
+      const apart = Math.hypot(
+        unit.position.x - feet.x,
+        unit.position.y - feet.y,
+        unit.position.z - feet.z,
+      );
+      assert.ok(apart >= 8, `enforcer spawn ${apart.toFixed(2)} m`);
+    }
+    if (i < 3) {
+      const mark = fight.wisps.time;
+      fight.killAll();
+      assert.equal(fight.wisps.aliveCount(), 0);
+      assert.equal(fight.enforcers.aliveCount(), 0);
+      assert.equal(fight.wisps.phase, "gap");
+      step(fight, WAVE_GAP_SECONDS - 0.1, feet);
+      assert.equal(fight.wisps.aliveCount(), 0, "the next wave spawned early");
+      step(fight, 0.2, feet);
+      const gap = fight.wisps.time - mark;
+      assert.ok(gap >= WAVE_GAP_SECONDS - 0.02 && gap <= WAVE_GAP_SECONDS + 0.12, `gap ${gap}`);
+      assert.equal(fight.wisps.phase, "fighting");
+    }
   }
+  console.log(
+    `waves ${seen.map((row) => `${row.drones}+${row.enforcers}`).join(", ")}, max alive ${maxAlive}`,
+  );
   assert.deepEqual(seen, [
     { drones: 2, enforcers: 1 },
     { drones: 3, enforcers: 1 },
     { drones: 4, enforcers: 2 },
     { drones: 4, enforcers: 2 },
   ]);
-  assert.equal(sim.cleared, undefined);
-  assert.equal(sim.won, undefined);
+  assert.ok(maxAlive <= DRONE_CAP + ENFORCER_CAP);
+  assert.equal(fight.wisps.cleared, undefined);
+  assert.equal(fight.wisps.won, undefined);
 });
 
 test("death recap matches a scripted fight and further hits do nothing", () => {
@@ -240,7 +271,7 @@ test("restart returns spawn vitals, wave 1, and an empty battlefield", () => {
   const hitboxes = createHitboxWorld();
   const quill = createQuill({ hull, player, hitboxes });
   const pickups = createPickupSim(quill);
-  const sim = createWispSim({ hull, player, hitboxes, origin: ATRIUM_SPAWN });
+  const sim = createWispSim({ hull, player, hitboxes, origin: ATRIUM_SPAWN, enforcersEnabled: false });
   const pool = sim.drones;
   const bolts = sim.bolts;
   const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };

@@ -148,6 +148,16 @@ async function assertDrones(page, errors, label) {
     errors.push(`${label}: expected 2 WISP-4 drones, saw ${drones.count}`);
     return;
   }
+  if (drones.enforcerAlive !== 1) {
+    errors.push(`${label}: expected 1 enforcer, saw ${drones.enforcerAlive}`);
+  }
+  if (label === "at load") {
+    for (const unit of drones.enforcerUnits ?? []) {
+      if (!unit.alive) continue;
+      const apart = Math.hypot(unit.x, unit.y - 0.8, unit.z - 7.4);
+      if (!(apart >= 8)) errors.push(`${label}: enforcer spawned ${apart.toFixed(2)} m from the player`);
+    }
+  }
   for (const drone of alive) {
     if (!drone.alive) errors.push(`${label}: a WISP-4 is already dead`);
     if (!drone.aggro) errors.push(`${label}: a WISP-4 is not aggro`);
@@ -1219,6 +1229,7 @@ async function runDevSmoke(browser, errors) {
         phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
         wave: run?.wave,
         count: run?.count,
+        enforcerAlive: run?.enforcerAlive,
         frags: run?.frags,
         wavesCleared: run?.wavesCleared,
         phaseRun: run?.phase,
@@ -1235,9 +1246,14 @@ async function runDevSmoke(browser, errors) {
     if (!restarted.warningHidden || restarted.phase === "warning") {
       errors.push(`dev warning returned on restart (${restarted.phase})`);
     }
-    if (restarted.wave !== 1 || restarted.count !== 2 || restarted.phaseRun !== "fighting") {
+    if (
+      restarted.wave !== 1 ||
+      restarted.count !== 2 ||
+      restarted.enforcerAlive !== 1 ||
+      restarted.phaseRun !== "fighting"
+    ) {
       errors.push(
-        `dev restart wave is ${restarted.wave} count ${restarted.count} phase ${restarted.phaseRun}`,
+        `dev restart wave is ${restarted.wave} count ${restarted.count} enforcers ${restarted.enforcerAlive} phase ${restarted.phaseRun}`,
       );
     }
     if (restarted.frags !== 0 || restarted.wavesCleared !== 0) {
@@ -1278,7 +1294,16 @@ async function runDevSmoke(browser, errors) {
             snap = run.snapshot;
           }
           const stats = canvas.fragStats;
-          if (!(snap.wave >= 3 && snap.count === 4 && snap.bolts > 0 && stats && stats.calls > 0)) {
+          if (
+            !(
+              snap.wave >= 3 &&
+              snap.count === 4 &&
+              snap.enforcerAlive === 2 &&
+              snap.bolts > 0 &&
+              stats &&
+              stats.calls > 0
+            )
+          ) {
             return false;
           }
           return {
@@ -1290,6 +1315,7 @@ async function runDevSmoke(browser, errors) {
             textures: stats.textures,
             wave: snap.wave,
             count: snap.count,
+            enforcerAlive: snap.enforcerAlive,
             bolts: snap.bolts,
           };
         },
@@ -1300,12 +1326,21 @@ async function runDevSmoke(browser, errors) {
     } catch (error) {
       const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
       const snap = await page.evaluate(() => window.__fragRun?.snapshot ?? null);
-      errors.push(`dev wave 3 did not field 4 firing drones (${JSON.stringify(snap)}): ${message}`);
+      errors.push(`dev wave 3 did not field 4 drones and 2 enforcers (${JSON.stringify(snap)}): ${message}`);
     }
     if (report) {
       console.log(
-        `renderer.info at wave ${report.wave} with ${report.count} drones firing: calls ${report.calls}, triangles ${report.triangles}, lines ${report.lines}, points ${report.points}, geometries ${report.geometries}, textures ${report.textures}, live bolts ${report.bolts}`,
+        `renderer.info at wave ${report.wave} with ${report.count} drones and ${report.enforcerAlive} enforcers firing: calls ${report.calls}, triangles ${report.triangles}, lines ${report.lines}, points ${report.points}, geometries ${report.geometries}, textures ${report.textures}, live bolts ${report.bolts}`,
       );
+      if (!(report.calls > 0 && report.calls <= 80)) {
+        errors.push(`wave 3 draw calls ${report.calls} outside 1..80`);
+      }
+      if (!(report.triangles > 0 && report.triangles <= 50_000)) {
+        errors.push(`wave 3 triangles ${report.triangles} outside 1..50000`);
+      }
+      if (report.enforcerAlive !== 2 || report.count !== 4) {
+        errors.push(`wave 3 roster drones ${report.count} enforcers ${report.enforcerAlive}`);
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
@@ -1435,6 +1470,10 @@ async function readFight(page) {
       damageEvents: drones?.damageEvents ?? null,
       firstBolt: drones?.firstBolt ?? null,
       live: drones?.bolts ?? null,
+      enforcerShots: drones?.enforcerShots ?? null,
+      enforcerHits: drones?.enforcerHits ?? null,
+      enforcerFirstShot: drones?.enforcerFirstShot ?? null,
+      enforcerUnits: drones?.enforcerUnits ?? null,
       phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
     };
   });
@@ -1449,6 +1488,9 @@ async function assertStationaryDamage(browser, errors) {
     if (message.type() === "error") errors.push(`damage probe console: ${message.text()}`);
   });
   try {
+    await page.addInitScript(() => {
+      window.__fragBenchHp = 500;
+    });
     await installSlowFrames(page);
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
     await page.waitForSelector("canvas", { timeout: 10_000 });
@@ -1470,8 +1512,16 @@ async function assertStationaryDamage(browser, errors) {
     await new Promise((resolve) => setTimeout(resolve, 2200));
     const held = await readFight(page);
     console.log(`paused drones: ${JSON.stringify(frozen)} -> ${JSON.stringify(held)}`);
-    if (held.time !== frozen.time || held.fired !== frozen.fired || held.hits !== frozen.hits) {
-      errors.push(`drones kept simulating while paused (${JSON.stringify(frozen)} -> ${JSON.stringify(held)})`);
+    const heldUnits = JSON.stringify(held.enforcerUnits);
+    const frozenUnits = JSON.stringify(frozen.enforcerUnits);
+    if (
+      held.time !== frozen.time ||
+      held.fired !== frozen.fired ||
+      held.hits !== frozen.hits ||
+      held.enforcerShots !== frozen.enforcerShots ||
+      heldUnits !== frozenUnits
+    ) {
+      errors.push(`enemies kept simulating while paused (${JSON.stringify(frozen)} -> ${JSON.stringify(held)})`);
     }
     await page.locator("#pause").click();
     await page.waitForFunction(
@@ -1489,7 +1539,7 @@ async function assertStationaryDamage(browser, errors) {
           const canvas = document.querySelector("canvas");
           const drones = canvas instanceof HTMLCanvasElement ? canvas.fragDrones : null;
           if (!drones) return false;
-          if (drones.time < 2 && drones.fired !== 0) window.__graceOk = false;
+          if (drones.time < 2 && (drones.fired !== 0 || drones.enforcerShots !== 0)) window.__graceOk = false;
           return drones.time >= 10;
         },
         undefined,
@@ -1505,16 +1555,22 @@ async function assertStationaryDamage(browser, errors) {
     const graceOk = await page.evaluate(() => window.__graceOk !== false);
     const loss = Number(frozen.hp) - Number(report.hp);
     const cadence = (2 * 2 * 8) / (0.15 + 1.8);
+    const enforcerHits = Number(report.enforcerHits ?? 0);
     console.log(
-      `stationary 200 ms frames: hp ${frozen.hp} -> ${report.hp} (${loss} HP), fired ${report.fired}, hits ${report.hits}, damage events ${report.damageEvents}, first bolt ${report.firstBolt}, sim ${report.time}, live bolts ${report.live}, cadence max ${cadence.toFixed(2)} HP/s`,
+      `stationary 200 ms frames: hp ${frozen.hp} -> ${report.hp} (${loss} HP), fired ${report.fired}, hits ${report.hits}, damage events ${report.damageEvents}, first bolt ${report.firstBolt}, enforcer shots ${report.enforcerShots}, enforcer hits ${enforcerHits}, first enforcer ${report.enforcerFirstShot}, sim ${report.time}, live bolts ${report.live}, cadence max ${cadence.toFixed(2)} HP/s`,
     );
     if (!graceOk || !(report.firstBolt >= 2)) {
       errors.push(`a drone fired during spawn grace (first ${report.firstBolt}, graceOk ${graceOk})`);
     }
+    if (report.enforcerFirstShot != null && !(report.enforcerFirstShot >= 2)) {
+      errors.push(`an enforcer fired during spawn grace (first ${report.enforcerFirstShot})`);
+    }
     if (report.hits !== 8 || report.damageEvents !== 8) {
       errors.push(`bolts that hit ${report.hits}, damage events ${report.damageEvents}, expected 8 each`);
     }
-    if (loss !== 64) errors.push(`HP loss ${loss} over the 10 s window (hp ${report.hp})`);
+    if (loss !== 64 + enforcerHits * 12) {
+      errors.push(`HP loss ${loss} did not match 64 drone + ${enforcerHits}×12 enforcer (hp ${report.hp})`);
+    }
     if (!(loss <= cadence * 10 + 1e-6)) {
       errors.push(`HP loss ${loss} exceeded the cadence maximum ${(cadence * 10).toFixed(2)}`);
     }
@@ -1532,6 +1588,9 @@ async function assertThrottledFire(browser, errors) {
     errors.push(`fire probe pageerror: ${error.message}`);
   });
   try {
+    await page.addInitScript(() => {
+      window.__fragBenchHp = 500;
+    });
     await installFireProbe(page);
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
     await page.waitForSelector("canvas", { timeout: 10_000 });

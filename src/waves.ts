@@ -4,11 +4,10 @@
 // Each clear adds one drone. A second enforcer arrives on wave 3. The cap is
 // 4 drones and 2 enforcers, and it stays there forever.
 //
-// ENFORCER_ENABLED is false for this release, so the atrium spawns drones
-// only: 2, then 3, then 4, then 4. FRAG-014 flips the flag and adds the
-// enforcer spawner. Until then the enforcer number is only a count.
+// ENFORCER_ENABLED gates the live spawner. The count below is what a wave
+// fields when the flag is on: 2+1, 3+1, then 4+2 forever.
 
-export const ENFORCER_ENABLED = false;
+export const ENFORCER_ENABLED = true;
 
 export const DRONE_CAP = 4;
 export const ENFORCER_CAP = 2;

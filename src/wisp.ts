@@ -1,4 +1,4 @@
-// WISP-4, the rogue security drone. The only enemy in the early release.
+// WISP-4, the rogue security drone.
 //
 // Wave 1 spawns two of them, already hostile. Later waves reuse this same
 // pool, up to four alive. Each hovers at 5.5 m/s,
@@ -27,7 +27,9 @@ import {
   DRONE_CAP,
   createWaveDirector,
   type DeathRecap,
+  type WaveDirector,
   type WavePhase,
+  type WavePlan,
 } from "./waves.ts";
 
 export const WISP_HP = 40;
@@ -160,6 +162,8 @@ export interface WispSim {
   boltTime(drone: number, index: number): number;
   telegraphCount(drone: number): number;
   telegraphTime(drone: number, index: number): number;
+  /** Start the gap when drones and any allied enforcers are all dead. */
+  notifyAllies(): void;
   snapshot(): WispSnapshot;
 }
 
@@ -168,8 +172,14 @@ export interface WispOptions {
   player: PlayerStore;
   hitboxes?: HitboxWorld;
   origin?: Vec3;
-  /** Defaults to ENFORCER_ENABLED. The count is recorded; no enforcer is built. */
+  /** Defaults to ENFORCER_ENABLED. Ignored when `director` is passed in. */
   enforcersEnabled?: boolean;
+  /** Shared with the enforcer sim so a wave has one clock. */
+  director?: WaveDirector;
+  /** Enforcers still standing. The gap waits until this is 0. */
+  alliesAlive?: () => number;
+  /** Fires when a wave's drones are placed, including the opening spawn. */
+  onWaveSpawn?: (plan: WavePlan, feet: Vec3) => void;
 }
 
 interface Drone extends WispDrone {
@@ -290,7 +300,7 @@ export function createWispSim(options: WispOptions): WispSim {
   const player = options.player;
   const hitboxes = options.hitboxes ?? playerHitboxes;
   const origin = options.origin ?? { x: 0, y: 0, z: 0 };
-  const director = createWaveDirector({ enforcersEnabled: options.enforcersEnabled });
+  const director = options.director ?? createWaveDirector({ enforcersEnabled: options.enforcersEnabled });
   const parked: Vec3 = { x: 0, y: -20, z: 0 };
   const drones: Drone[] = [];
   for (let i = 0; i < DRONE_CAP; i += 1) {
@@ -607,7 +617,15 @@ export function createWispSim(options: WispOptions): WispSim {
       drone.handle.setActive(true);
       faceOrigin(drone, feet);
     }
+    options.onWaveSpawn?.(plan, feet);
     director.acknowledgeSpawn();
+  }
+
+  function battlefieldClear(): void {
+    if (director.phase !== "fighting") return;
+    if (countAlive() > 0) return;
+    if ((options.alliesAlive?.() ?? 0) > 0) return;
+    director.noteEmpty();
   }
 
   function restart(next: Vec3): void {
@@ -690,7 +708,7 @@ export function createWispSim(options: WispOptions): WispSim {
       focus.x = feet.x;
       focus.y = feet.y;
       focus.z = feet.z;
-      if (director.phase === "fighting" && countAlive() === 0) director.noteEmpty();
+      if (director.phase === "fighting" && countAlive() === 0) battlefieldClear();
       const mark = time;
       if (director.phase === "gap") {
         stepBolts(dt);
@@ -757,6 +775,9 @@ export function createWispSim(options: WispOptions): WispSim {
       if (index < 0 || index >= count) return Number.NaN;
       return telegraphTimes[drone]![index]!;
     },
+    notifyAllies(): void {
+      battlefieldClear();
+    },
     snapshot(): WispSnapshot {
       let count = 0;
       let liveBolts = 0;
@@ -804,7 +825,7 @@ export function createWispSim(options: WispOptions): WispSim {
     drone.handle.setActive(false);
     emitDeath(drone.position);
     director.noteFrag();
-    if (countAlive() === 0) director.noteEmpty();
+    if (countAlive() === 0) battlefieldClear();
   }
 
   function emitDeath(at: Vec3): void {
@@ -818,7 +839,7 @@ const RUN_DEBUG_KEY = "__fragRun";
 
 export function exposeRunDebug(
   target: object,
-  sim: { killAlive(): void; snapshot(): WispSnapshot },
+  sim: { killAlive(): void; snapshot(): object },
 ): void {
   Object.defineProperty(target, RUN_DEBUG_KEY, {
     configurable: true,
@@ -827,7 +848,7 @@ export function exposeRunDebug(
       killAlive(): void {
         sim.killAlive();
       },
-      get snapshot(): WispSnapshot {
+      get snapshot(): object {
         return sim.snapshot();
       },
     },
