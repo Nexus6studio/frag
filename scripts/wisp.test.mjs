@@ -33,6 +33,7 @@ import {
   wispInsideVolume,
   wispVisorHex,
 } from "../src/wisp.ts";
+import { DRONE_CAP } from "../src/waves.ts";
 
 const DT = 1 / 120;
 
@@ -54,10 +55,12 @@ function step(sim, seconds, feet) {
 
 test("two drones spawn clear of the hull and at least 8 m from the player", () => {
   const { hull, sim } = atriumSim();
-  assert.equal(sim.drones.length, WISP_COUNT);
+  assert.equal(sim.drones.length, DRONE_CAP);
+  assert.equal(sim.aliveCount(), WISP_COUNT);
   assert.equal(WISP_ARMOR, 0);
   const seen = [];
   for (const drone of sim.drones) {
+    if (!drone.alive) continue;
     assert.equal(drone.alive, true);
     assert.equal(drone.hp, WISP_HP);
     assert.equal(drone.aggro, true);
@@ -186,6 +189,7 @@ test("telegraph leads every burst, bolts are 0.15 s apart, and bursts are 1.8 s 
   const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
   step(sim, 8, feet);
   for (const drone of sim.drones) {
+    if (!drone.alive) continue;
     const bolts = sim.boltCount(drone.index);
     const teles = sim.telegraphCount(drone.index);
     assert.ok(bolts >= 4, `drone ${drone.index} fired ${bolts}`);

@@ -1,8 +1,12 @@
 import "./hud.css";
 import type { PlayerStore } from "../player/state";
-import { bindHud, type HudElements } from "./model";
+import type { DeathRecap } from "../waves.ts";
+import { bindHud, deathRecapText, type HudElements } from "./model";
 
-export function mountHud(player: PlayerStore): void {
+export function mountHud(
+  player: PlayerStore,
+  hooks?: { onRestart?: () => void; getRecap?: () => DeathRecap },
+): void {
   const root = document.createElement("div");
   root.id = "hud";
   root.dataset.mode = "hidden";
@@ -28,7 +32,7 @@ export function mountHud(player: PlayerStore): void {
   death.id = "death-recap";
   death.tabIndex = -1;
   death.hidden = true;
-  death.textContent = "click to restart";
+  death.textContent = deathRecapText({ wavesCleared: 0, frags: 0, timeAlive: 0 });
 
   root.append(crosshair, bar, death);
 
@@ -50,7 +54,9 @@ export function mountHud(player: PlayerStore): void {
     else delete document.documentElement.dataset.cursor;
   };
 
-  const bound = bindHud(player, els, () => shell?.getAttribute("data-phase") ?? null, syncCursor);
+  const bound = bindHud(player, els, () => shell?.getAttribute("data-phase") ?? null, syncCursor, {
+    getRecap: hooks?.getRecap,
+  });
 
   const observer = new MutationObserver(() => {
     bound.update();
@@ -64,7 +70,8 @@ export function mountHud(player: PlayerStore): void {
       if (root.dataset.mode !== "dead") return;
       event.preventDefault();
       event.stopPropagation();
-      player.restart();
+      if (hooks?.onRestart) hooks.onRestart();
+      else player.restart();
     },
     true,
   );

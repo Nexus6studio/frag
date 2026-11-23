@@ -23,4 +23,8 @@ test("a pointer-lock release pauses only after the lock has stuck", () => {
     unlockShouldPause({ phase: "warning", requestOpen: false, lockStable: false }),
     false,
   );
+  assert.equal(
+    unlockShouldPause({ phase: "playing", requestOpen: false, lockStable: true, hold: true }),
+    false,
+  );
 });

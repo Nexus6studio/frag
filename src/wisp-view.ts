@@ -20,9 +20,9 @@ import {
   Vector3,
   type Scene,
 } from "three";
+import { DRONE_CAP } from "./waves.ts";
 import {
   WISP_BOLT_CAP,
-  WISP_COUNT,
   WISP_FLUID_CAP,
   WISP_FLUID_COLOR,
   WISP_GIB_CAP,
@@ -48,7 +48,7 @@ export function mountWispView(scene: Scene, sim: WispSim): { sync(): void } {
     fog: false,
     side: DoubleSide,
   });
-  const bodies = instanced(discGeometry(), bodyMat, WISP_COUNT);
+  const bodies = instanced(discGeometry(), bodyMat, DRONE_CAP);
   bodies.name = "wisp-body";
 
   const visorMat = new MeshBasicMaterial({
@@ -56,7 +56,7 @@ export function mountWispView(scene: Scene, sim: WispSim): { sync(): void } {
     toneMapped: false,
     fog: false,
   });
-  const visors = instanced(visorGeometry(), visorMat, WISP_COUNT);
+  const visors = instanced(visorGeometry(), visorMat, DRONE_CAP);
   visors.name = "wisp-visor";
 
   const glowMat = new MeshBasicMaterial({
@@ -69,7 +69,7 @@ export function mountWispView(scene: Scene, sim: WispSim): { sync(): void } {
     fog: false,
     side: DoubleSide,
   });
-  const glows = instanced(discGeometry(), glowMat, WISP_COUNT);
+  const glows = instanced(discGeometry(), glowMat, DRONE_CAP);
   glows.name = "wisp-telegraph";
 
   const boltMat = new MeshBasicMaterial({

@@ -94,6 +94,8 @@ export interface QuillDriver {
    * magazine. Returns how many rounds fit. Ammo pads call this.
    */
   grantReserve(amount: number): number;
+  /** Magazine 40, reserve 40, no live flechettes. A death restart calls this. */
+  reset(): void;
 }
 
 export function aimDirection(yawDeg: number, pitchDeg: number, out: Vec3): Vec3 {
@@ -377,6 +379,21 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
       reserve += gain;
       publish();
       return gain;
+    },
+    reset(): void {
+      mag = QUILL_MAG;
+      reserve = QUILL_RESERVE_START;
+      reloading = false;
+      reloadTimer = 0;
+      carry = QUILL_INTERVAL;
+      triggerHeld = false;
+      punch = 0;
+      punchAge = QUILL_PUNCH_RECOVER;
+      flash = 0;
+      for (let i = 0; i < pool.length; i += 1) pool[i]!.alive = false;
+      publishedMag = -1;
+      publishedReserve = -1;
+      publish();
     },
   };
 }

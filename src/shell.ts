@@ -18,7 +18,10 @@ export function unlockShouldPause(input: {
   phase: string;
   requestOpen: boolean;
   lockStable: boolean;
+  /** A death-restart click releases the lock. That release is not a pause. */
+  hold?: boolean;
 }): boolean {
+  if (input.hold) return false;
   if (input.phase !== "playing") return false;
   if (input.requestOpen) return false;
   return input.lockStable;
@@ -40,6 +43,8 @@ export function mountShell(canvas: HTMLCanvasElement): {
   /** True while the FPS readout (and the dev target volume) is showing. */
   readonly debug: boolean;
   onFrame(time: number, pose?: DebugPose): void;
+  /** Keep playing across the unlock a restart click causes. Does not show the warning. */
+  holdLock(): void;
 } {
   const root = required<HTMLElement>("#app-shell");
   const warning = required<HTMLElement>("#content-warning");
@@ -50,6 +55,7 @@ export function mountShell(canvas: HTMLCanvasElement): {
 
   let phase: Phase = "warning";
   let showFps = false;
+  let restartHold = false;
   let lockRequest = 0;
   let lockEpoch = 0;
   let lockStable = false;
@@ -181,11 +187,17 @@ export function mountShell(canvas: HTMLCanvasElement): {
     }
     const requestOpen = lockRequest !== 0;
     const wasStable = lockStable;
+    const held = restartHold;
+    restartHold = false;
     lockEpoch += 1;
     lockStable = false;
     window.clearTimeout(stableTimer);
     if (requestOpen) lockRequest = 0;
-    if (unlockShouldPause({ phase, requestOpen, lockStable: wasStable })) setPhase("paused");
+    if (unlockShouldPause({ phase, requestOpen, lockStable: wasStable, hold: held })) {
+      setPhase("paused");
+    } else if (held && phase === "playing") {
+      requestLock();
+    }
   });
 
   setPhase("warning");
@@ -196,6 +208,12 @@ export function mountShell(canvas: HTMLCanvasElement): {
     },
     get debug() {
       return showFps;
+    },
+    holdLock(): void {
+      if (phase === "warning" || phase === "ready") return;
+      restartHold = document.pointerLockElement === canvas;
+      setPhase("playing");
+      requestLock();
     },
     onFrame(time: number, pose?: DebugPose): void {
       if (lastTime !== 0) {

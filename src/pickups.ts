@@ -75,6 +75,8 @@ export interface PickupPad {
 export interface PickupSim {
   readonly pads: readonly PickupPad[];
   step(dt: number, feet: Vec3, player: PlayerStore): void;
+  /** Pads are available again. A death restart calls this. */
+  reset(): void;
 }
 
 export function applyDamage(damage: number, hp: number, armor: number): DamageResult {
@@ -161,6 +163,9 @@ export function createPickupSim(bank: ReserveBank | null = null, source: readonl
 
   return {
     pads,
+    reset(): void {
+      for (let i = 0; i < pads.length; i += 1) pads[i]!.cooldown = 0;
+    },
     step(dt: number, feet: Vec3, player: PlayerStore): void {
       const stepDt = Number.isFinite(dt) && dt > 0 ? dt : 0;
       for (const pad of pads) {
