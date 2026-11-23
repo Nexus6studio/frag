@@ -63,15 +63,23 @@ The prototype weapon is a magnetic flechette carbine. Holding the left mouse fir
 
 Two health pads and three ammo pads sit on the atrium landmarks. The body collects one by walking the capsule into its trigger. A collected pad stays in place and goes dark until its timer elapses, then it can be taken again. Health adds 25 and stops at 100, and returns after 20 s. Ammo adds 40 flechettes to the Quill Driver reserve and does not top up the magazine. Reserve stops at 80, so 40 in the magazine and 70 in reserve becomes 40+80, and the pad returns after 15 s. A pad that cannot add anything, because health is already 100 or the reserve is already 80, stays lit. The health pad is an acid-green canister with a cross. The ammo pad is a magenta crate. Both are procedural geometry.
 
-The two armor landmarks stay in the map data. `ARMOR_ENABLED` is false, so those pads are not drawn and cannot be collected. The armor number on the HUD stays hidden. Armor absorption is the damage rule a WISP-4 bolt calls: for damage D and armor A, armor takes min(A, floor(D·2/3)) and the rest comes off HP. A hit that would remove less than 1 HP still removes 1. In this release armor is 0, so the whole hit lands on HP. HP at 0 is the click-to-restart recap.
+The two armor landmarks stay in the map data. `ARMOR_ENABLED` is false, so those pads are not drawn and cannot be collected. The armor number on the HUD stays hidden. Armor absorption is the damage rule a WISP-4 bolt calls: for damage D and armor A, armor takes min(A, floor(D·2/3)) and the rest comes off HP. A hit that would remove less than 1 HP still removes 1. In this release armor is 0, so the whole hit lands on HP. HP at 0 is death: the fight stops damaging the player and the recap takes over.
 
 ## WISP-4
 
-The early release ships one enemy, the WISP-4 rogue security drone. Two spawn in the atrium at the start, already hostile, at least 8 m from the player and clear of the hulls. Each is a low-poly hovering disc with cyan running lights and a visor slit that is red while it is aggro. It has 40 HP and no armor. Only VEC-9 flechettes damage it, through the projectile hitbox sweep. There is no hitscan.
+The early release ships one enemy, the WISP-4 rogue security drone. Wave 1 spawns two, already hostile, at least 8 m from the player and clear of the hulls. Each is a low-poly hovering disc with cyan running lights and a visor slit that is red while it is aggro. It has 40 HP and no armor. Only VEC-9 flechettes damage it, through the projectile hitbox sweep. There is no hitscan.
 
 It hovers at 5.5 m/s and strafe-orbits, preferring 8–14 m. Altitude stays 1.2–2.4 m above the deck under it. Inside 6 m it takes the high end of that band. A player on a catwalk makes it climb clear of the parapet, then drop to the low band to peek. It does not use cover, and it stays inside the 32 × 32 × 9 atrium.
 
-The attack is a two-bolt plasma burst. Each bolt travels at 18 m/s, is 0.25 m in radius, and deals 8 damage through the armor rule above. Bolts in a burst are 0.15 s apart. The next burst's first bolt is 1.8 s after the second, and the last 0.3 s of that gap is a glow telegraph. Bolts die on the atrium hulls. A death is a spark burst, small metal and plastic scraps, and dark hydraulic fluid. Bolts and scraps are pooled. The drone, the bolts, and the scraps are procedural geometry.
+The attack is a two-bolt plasma burst. Each bolt travels at 18 m/s, is 0.25 m in radius, and deals 8 damage through the armor rule above. Bolts in a burst are 0.15 s apart. The next burst's first bolt is 1.8 s after the second, and the last 0.3 s of that gap is a glow telegraph. Bolts die on the atrium hulls. A death is a spark burst, small metal and plastic scraps, and dark hydraulic fluid. Bolts, scraps, and the drones themselves are pooled. The drone, the bolts, and the scraps are procedural geometry.
+
+## Waves
+
+There is no last wave and no arena-clear screen. `waveComposition` is the schedule: wave 1 is 2 drones and 1 enforcer, each clear adds one drone, a second enforcer arrives on wave 3, and the cap is 4 drones and 2 enforcers. `ENFORCER_ENABLED` is false in this release, so enforcers are not spawned. Clearing waves spawns 2, then 3, then 4, then 4 drones. With the flag on, the same waves are 2+1, 3+1, 4+2, 4+2. The next wave waits about 2 seconds after the current one is fully dead. Spawns stay at least 8 m from the player, inside the atrium, and outside the hulls. At most 4 drones are alive at once.
+
+## Death
+
+HP at 0 hides the combat HUD and shows waves cleared, frags, time alive as mm:ss, and "click to restart". The sim does not keep damaging a downed player. Click restarts that same page load: the body is back on the south concourse at 100 HP, 0 armor, and 40+40 ammo, wave 1 spawns clean, live bolts and scraps are cleared, pickup pads are lit, and the recap counters return to zero. The content warning stays dismissed until a reload. Nothing is written to `localStorage`. There is no score and no main menu.
 
 ## Field of view
 

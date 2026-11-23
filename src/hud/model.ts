@@ -1,4 +1,7 @@
 import type { PlayerStore, PlayerVitals } from "../player/state";
+import { formatClock, type DeathRecap } from "../waves.ts";
+
+export type { DeathRecap };
 
 // Armor is deferred. The readout stays invisible, and the slot keeps its box
 // so turning this on later does not move HP or ammo.
@@ -41,7 +44,11 @@ export function hudReadout(state: PlayerVitals, phase: string | null): HudReadou
   };
 }
 
-export function applyHud(els: HudElements, view: HudReadout): void {
+export function deathRecapText(recap: DeathRecap): string {
+  return `waves ${recap.wavesCleared}\nfrags ${recap.frags}\n${formatClock(recap.timeAlive)}\nclick to restart`;
+}
+
+export function applyHud(els: HudElements, view: HudReadout, recap?: DeathRecap | null): void {
   els.root.dataset.mode = view.mode;
   els.hp.textContent = view.hp;
   els.armor.textContent = view.armor;
@@ -51,6 +58,7 @@ export function applyHud(els: HudElements, view: HudReadout): void {
   if (view.showArmor) els.armorStat.removeAttribute("aria-hidden");
   else els.armorStat.setAttribute("aria-hidden", "true");
   els.death.hidden = view.mode !== "dead";
+  if (recap) els.death.textContent = deathRecapText(recap);
 }
 
 export function bindHud(
@@ -58,9 +66,10 @@ export function bindHud(
   els: HudElements,
   getPhase: () => string | null,
   onRender?: () => void,
+  hooks?: { getRecap?: () => DeathRecap },
 ): { update(): void; destroy(): void } {
   const update = (): void => {
-    applyHud(els, hudReadout(player.get(), getPhase()));
+    applyHud(els, hudReadout(player.get(), getPhase()), hooks?.getRecap?.() ?? null);
     onRender?.();
   };
   const unsubscribe = player.subscribe(update);

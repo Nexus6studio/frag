@@ -15,6 +15,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ATRIUM_SPAWN, createAtriumHull, needsRespawn } from "./atrium.ts";
+import { restartCombat } from "./combat.ts";
 import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium, syncPadViews } from "./floor.ts";
 import { playerHitboxes } from "./hitbox.ts";
 import { mountHud } from "./hud/hud";
@@ -34,7 +35,7 @@ import { mountQuillView } from "./quill-view.ts";
 import { applyDamage, createPickupSim, exposeDamageDebug } from "./pickups.ts";
 import { createPlayerState, exposePlayerDebug } from "./player/state";
 import { mountShell } from "./shell";
-import { createWispSim } from "./wisp.ts";
+import { createWispSim, exposeRunDebug } from "./wisp.ts";
 import { mountWispView } from "./wisp-view.ts";
 
 const renderer = new WebGLRenderer({
@@ -53,7 +54,6 @@ document.body.appendChild(renderer.domElement);
 const shell = mountShell(renderer.domElement);
 const input = createInput(renderer.domElement);
 const player = createPlayerState();
-mountHud(player);
 
 const hull = createAtriumHull();
 let mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
@@ -88,6 +88,24 @@ const debugTarget = import.meta.env.DEV
 const quillView = mountQuillView(scene, camera, quill, debugTarget);
 const wisps = createWispSim({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN });
 const wispView = mountWispView(scene, wisps);
+
+function restartRun(): void {
+  restartCombat({
+    player,
+    quill,
+    pickups,
+    wisps,
+    origin: ATRIUM_SPAWN,
+  });
+  mover = createMover(hull, createMoveState(ATRIUM_SPAWN));
+  camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z);
+  shell.holdLock();
+}
+
+mountHud(player, {
+  onRestart: restartRun,
+  getRecap: () => wisps.recap(),
+});
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
 const quillCommand = { fire: false, reload: false, origin: muzzle, direction: aim };
@@ -133,6 +151,7 @@ if (import.meta.env.DEV) {
     const next = applyDamage(damage, current.hp, current.armor);
     player.set({ hp: next.hp, armor: next.armor });
   });
+  exposeRunDebug(window, wisps);
 }
 
 function resize(): void {
@@ -156,7 +175,8 @@ function frame(time: number): void {
   const captured =
     shell.phase === "playing" && document.pointerLockElement === renderer.domElement;
   const controls = input.sample(captured);
-  if (captured) {
+  const living = player.get().hp > 0;
+  if (captured && living) {
     look.apply(controls.lookX, controls.lookY);
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
     if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
@@ -170,7 +190,7 @@ function frame(time: number): void {
   const body = mover.state;
   syncPadViews(atrium.pads, pickups.pads);
   camera.position.set(body.position.x, body.position.y + EYE_HEIGHT, body.position.z);
-  if (captured) {
+  if (captured && living) {
     aimDirection(look.yaw, look.pitch, aim);
     muzzleOrigin(camera.position, aim, muzzle);
     quillCommand.fire = controls.down.fire;

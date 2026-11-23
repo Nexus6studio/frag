@@ -1,6 +1,7 @@
 // WISP-4, the rogue security drone. The only enemy in the early release.
 //
-// Two of them spawn in the atrium, already hostile. Each hovers at 5.5 m/s,
+// Wave 1 spawns two of them, already hostile. Later waves reuse this same
+// pool, up to four alive. Each hovers at 5.5 m/s,
 // strafe-orbits at 8–14 m, and holds 1.2–2.4 m above the deck under it.
 // Inside 6 m it takes the high end of that band. A player up on a catwalk
 // makes it climb clear of the parapet and then drop to the low band to peek.
@@ -22,6 +23,12 @@ import { CAPSULE_HEIGHT, CAPSULE_RADIUS, EYE_HEIGHT, type BoxSolid, type Hull, t
 import { damagePlayer } from "./player/hurt.ts";
 import type { PlayerStore } from "./player/state.ts";
 import { traceRay, traceSegment, type TraceHit } from "./trace.ts";
+import {
+  DRONE_CAP,
+  createWaveDirector,
+  type DeathRecap,
+  type WavePhase,
+} from "./waves.ts";
 
 export const WISP_HP = 40;
 export const WISP_ARMOR = 0;
@@ -109,6 +116,12 @@ export interface WispSnapshot {
   count: number;
   bolts: number;
   drones: { x: number; y: number; z: number; alive: boolean; hp: number; aggro: boolean }[];
+  wave: number;
+  wavesCleared: number;
+  frags: number;
+  timeAlive: number;
+  phase: WavePhase;
+  enforcers: number;
 }
 
 export interface WispSim {
@@ -119,7 +132,18 @@ export interface WispSim {
   readonly fluid: readonly WispParticle[];
   readonly time: number;
   readonly focus: Vec3;
+  readonly wave: number;
+  readonly wavesCleared: number;
+  readonly frags: number;
+  readonly timeAlive: number;
+  readonly phase: WavePhase;
+  readonly enforcers: number;
   update(dt: number, feet: Vec3): void;
+  aliveCount(): number;
+  hurt(index: number, amount: number): void;
+  killAlive(): void;
+  restart(origin: Vec3): void;
+  recap(): DeathRecap;
   boltCount(drone: number): number;
   boltTime(drone: number, index: number): number;
   telegraphCount(drone: number): number;
@@ -132,6 +156,8 @@ export interface WispOptions {
   player: PlayerStore;
   hitboxes?: HitboxWorld;
   origin?: Vec3;
+  /** Defaults to ENFORCER_ENABLED. The count is recorded; no enforcer is built. */
+  enforcersEnabled?: boolean;
 }
 
 interface Drone extends WispDrone {
@@ -214,15 +240,17 @@ export function sphereHitsHull(position: Vec3, radius: number, hull: Hull): bool
   return false;
 }
 
-export function planWispSpawns(feet: Vec3, hull: Hull): [Vec3, Vec3] {
+export function planWispSpawns(feet: Vec3, hull: Hull, count = WISP_COUNT): Vec3[] {
+  const wanted = Math.max(0, Math.min(DRONE_CAP, Math.floor(count)));
   const found: Vec3[] = [];
+  if (wanted === 0) return found;
   const seeds: { x: number; z: number }[] = [
     { x: feet.x, z: feet.z - 14 },
     { x: feet.x - 10, z: feet.z - 6 },
     { x: feet.x + 10, z: feet.z - 6 },
     { x: feet.x, z: feet.z + 10 },
   ];
-  for (let ring = 0; ring < 6; ring += 1) {
+  for (let ring = 0; ring < 8; ring += 1) {
     const radius = 9 + ring * 1.1;
     for (let i = 0; i < 24; i += 1) {
       const angle = (i / 24) * Math.PI * 2 + ring * 0.17;
@@ -240,9 +268,9 @@ export function planWispSpawns(feet: Vec3, hull: Hull): [Vec3, Vec3] {
     }
     if (!spaced) continue;
     found.push(point);
-    if (found.length === 2) return [found[0]!, found[1]!];
+    if (found.length === wanted) return found;
   }
-  throw new Error("WISP-4 could not find two clear spawns");
+  throw new Error(`WISP-4 could not find ${wanted} clear spawns`);
 }
 
 export function createWispSim(options: WispOptions): WispSim {
@@ -250,27 +278,43 @@ export function createWispSim(options: WispOptions): WispSim {
   const player = options.player;
   const hitboxes = options.hitboxes ?? playerHitboxes;
   const origin = options.origin ?? { x: 0, y: 0, z: 0 };
-  const spawns = planWispSpawns(origin, hull);
-  const drones: Drone[] = [
-    makeDrone(0, spawns[0], 1, "telegraph", hitboxes, (drone, amount) => applyFlechette(drone, amount)),
-    makeDrone(1, spawns[1], -1, "recover", hitboxes, (drone, amount) => applyFlechette(drone, amount)),
-  ];
-  faceOrigin(drones[0]!, origin);
-  faceOrigin(drones[1]!, origin);
+  const director = createWaveDirector({ enforcersEnabled: options.enforcersEnabled });
+  const parked: Vec3 = { x: 0, y: -20, z: 0 };
+  const drones: Drone[] = [];
+  for (let i = 0; i < DRONE_CAP; i += 1) {
+    const drone = makeDrone(
+      i,
+      parked,
+      i % 2 === 0 ? 1 : -1,
+      "recover",
+      hitboxes,
+      (unit, amount) => applyFlechette(unit, amount),
+    );
+    drone.alive = false;
+    drone.hp = 0;
+    drone.handle.setActive(false);
+    drones.push(drone);
+  }
   const bolts: WispBolt[] = [];
   for (let i = 0; i < WISP_BOLT_CAP; i += 1) bolts.push(makeBolt());
   const sparks = makePool(WISP_SPARK_CAP);
   const gibs = makePool(WISP_GIB_CAP);
   const fluid = makePool(WISP_FLUID_CAP);
-  const boltTimes = [new Float64Array(RECORD), new Float64Array(RECORD)];
-  const telegraphTimes = [new Float64Array(RECORD), new Float64Array(RECORD)];
-  const boltCounts = [0, 0];
-  const telegraphCounts = [0, 0];
+  const boltTimes: Float64Array[] = [];
+  const telegraphTimes: Float64Array[] = [];
+  const boltCounts: number[] = [];
+  const telegraphCounts: number[] = [];
+  for (let i = 0; i < DRONE_CAP; i += 1) {
+    boltTimes.push(new Float64Array(RECORD));
+    telegraphTimes.push(new Float64Array(RECORD));
+    boltCounts.push(0);
+    telegraphCounts.push(0);
+  }
   const focus: Vec3 = { x: origin.x, y: origin.y, z: origin.z };
   let time = 0;
   let birth = 0;
 
-  beginTelegraph(drones[0]!, 0);
+  spawnWave(origin);
 
   function beginTelegraph(drone: Drone, at: number): void {
     drone.phase = "telegraph";
@@ -467,6 +511,74 @@ export function createWispSim(options: WispOptions): WispSim {
     }
   }
 
+  function stepBolts(dt: number): void {
+    for (let i = 0; i < bolts.length; i += 1) stepBolt(bolts[i]!, dt);
+  }
+
+  function stepPools(dt: number): void {
+    stepPool(sparks, dt, 3);
+    stepPool(gibs, dt, 9);
+    stepPool(fluid, dt, 14);
+  }
+
+  function silence(pool: WispParticle[]): void {
+    for (let i = 0; i < pool.length; i += 1) pool[i]!.alive = false;
+  }
+
+  function countAlive(): number {
+    let count = 0;
+    for (let i = 0; i < drones.length; i += 1) if (drones[i]!.alive) count += 1;
+    return count;
+  }
+
+  function spawnWave(feet: Vec3): void {
+    const plan = director.plan();
+    const points = planWispSpawns(feet, hull, plan.drones);
+    for (let i = 0; i < drones.length; i += 1) {
+      const drone = drones[i]!;
+      drone.alive = false;
+      drone.hp = 0;
+      drone.handle.setActive(false);
+    }
+    for (let i = 0; i < plan.drones; i += 1) {
+      const drone = drones[i]!;
+      const point = points[i]!;
+      drone.position.x = point.x;
+      drone.position.y = point.y;
+      drone.position.z = point.z;
+      drone.alive = true;
+      drone.hp = WISP_HP;
+      drone.phase = "recover";
+      drone.timer = 0;
+      drone.handle.setActive(true);
+      faceOrigin(drone, feet);
+    }
+    const lead = drones[0];
+    if (lead?.alive) beginTelegraph(lead, time);
+    director.acknowledgeSpawn();
+  }
+
+  function restart(next: Vec3): void {
+    director.restart();
+    time = 0;
+    for (let i = 0; i < bolts.length; i += 1) bolts[i]!.alive = false;
+    silence(sparks);
+    silence(gibs);
+    silence(fluid);
+    for (let i = 0; i < DRONE_CAP; i += 1) {
+      boltCounts[i] = 0;
+      telegraphCounts[i] = 0;
+    }
+    focus.x = next.x;
+    focus.y = next.y;
+    focus.z = next.z;
+    spawnWave(next);
+  }
+
+  function rememberTime(mark: number): void {
+    director.addTime(time - mark);
+  }
+
   return {
     drones,
     bolts,
@@ -477,11 +589,64 @@ export function createWispSim(options: WispOptions): WispSim {
     get time() {
       return time;
     },
+    get wave() {
+      return director.wave;
+    },
+    get wavesCleared() {
+      return director.wavesCleared;
+    },
+    get frags() {
+      return director.frags;
+    },
+    get timeAlive() {
+      return director.timeAlive;
+    },
+    get phase() {
+      return director.phase;
+    },
+    get enforcers() {
+      return director.enforcers;
+    },
+    aliveCount(): number {
+      return countAlive();
+    },
+    hurt(index: number, amount: number): void {
+      const drone = drones[index];
+      if (!drone) return;
+      applyFlechette(drone, amount);
+    },
+    killAlive(): void {
+      for (let i = 0; i < drones.length; i += 1) {
+        const drone = drones[i]!;
+        if (!drone.alive) continue;
+        applyFlechette(drone, drone.hp > 0 ? drone.hp : WISP_HP);
+      }
+    },
+    restart,
+    recap(): DeathRecap {
+      return director.recap();
+    },
     update(dt: number, feet: Vec3): void {
       if (!Number.isFinite(dt) || dt <= 0) return;
+      if (player.get().hp <= 0) return;
       focus.x = feet.x;
       focus.y = feet.y;
       focus.z = feet.z;
+      if (director.phase === "fighting" && countAlive() === 0) director.noteEmpty();
+      const mark = time;
+      if (director.phase === "gap") {
+        stepBolts(dt);
+        stepPools(dt);
+        time += dt;
+        if (player.get().hp <= 0) {
+          rememberTime(mark);
+          return;
+        }
+        rememberTime(mark);
+        director.stepGap(dt);
+        if (director.pendingSpawn) spawnWave(feet);
+        return;
+      }
       let left = dt;
       let cursor = time;
       let guard = 0;
@@ -496,12 +661,15 @@ export function createWispSim(options: WispOptions): WispSim {
             moveDrone(drone, slice);
             drone.timer += slice;
           }
-          for (let i = 0; i < bolts.length; i += 1) stepBolt(bolts[i]!, slice);
-          stepPool(sparks, slice, 3);
-          stepPool(gibs, slice, 9);
-          stepPool(fluid, slice, 14);
+          stepBolts(slice);
+          stepPools(slice);
           cursor += slice;
           left -= slice;
+          if (player.get().hp <= 0) {
+            time = cursor;
+            rememberTime(mark);
+            return;
+          }
         }
         let fired = false;
         for (let i = 0; i < drones.length; i += 1) {
@@ -513,6 +681,7 @@ export function createWispSim(options: WispOptions): WispSim {
         if (!fired && slice <= 1e-8) break;
       }
       time = cursor;
+      rememberTime(mark);
     },
     boltCount(drone: number): number {
       return boltCounts[drone] ?? 0;
@@ -547,7 +716,17 @@ export function createWispSim(options: WispOptions): WispSim {
         });
       }
       for (let i = 0; i < bolts.length; i += 1) if (bolts[i]!.alive) liveBolts += 1;
-      return { count, bolts: liveBolts, drones: view };
+      return {
+        count,
+        bolts: liveBolts,
+        drones: view,
+        wave: director.wave,
+        wavesCleared: director.wavesCleared,
+        frags: director.frags,
+        timeAlive: director.timeAlive,
+        phase: director.phase,
+        enforcers: director.enforcers,
+      };
     },
   };
 
@@ -559,6 +738,8 @@ export function createWispSim(options: WispOptions): WispSim {
     drone.alive = false;
     drone.handle.setActive(false);
     emitDeath(drone.position);
+    director.noteFrag();
+    if (countAlive() === 0) director.noteEmpty();
   }
 
   function emitDeath(at: Vec3): void {
@@ -566,6 +747,26 @@ export function createWispSim(options: WispOptions): WispSim {
     emitKind(gibs, GIB_DIR, WISP_GIBS_PER_DEATH, at, 2.4, 1.15, 4);
     emitKind(fluid, FLUID_DIR, WISP_FLUID_PER_DEATH, at, 1.1, 0.9, 2);
   }
+}
+
+const RUN_DEBUG_KEY = "__fragRun";
+
+export function exposeRunDebug(
+  target: object,
+  sim: { killAlive(): void; snapshot(): WispSnapshot },
+): void {
+  Object.defineProperty(target, RUN_DEBUG_KEY, {
+    configurable: true,
+    enumerable: true,
+    value: {
+      killAlive(): void {
+        sim.killAlive();
+      },
+      get snapshot(): WispSnapshot {
+        return sim.snapshot();
+      },
+    },
+  });
 }
 
 function makeDrone(
