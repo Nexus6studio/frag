@@ -135,6 +135,29 @@ test("seeding look from an existing view does not move the camera until the mous
   assert.ok(Math.abs(horizontalFov(camera.fov, camera.aspect) - 105) < 1e-6);
 });
 
+test("restart facing clears yaw, pitch, and the camera, and keeps sensitivity", () => {
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.rotation.order = "YXZ";
+  camera.lookAt(0, 0, -1);
+  const look = createLook(camera);
+  look.apply(80, -400);
+  assert.ok(Math.abs(look.pitch) > 20, `pitch did not leave spawn (${look.pitch})`);
+  assert.ok(Math.abs(look.yaw) > 1, `yaw did not leave spawn (${look.yaw})`);
+  const sensitivity = look.sensitivity;
+  look.reset();
+  assert.equal(look.yaw, 0);
+  assert.equal(look.pitch, 0);
+  assert.equal(look.sensitivity, sensitivity);
+  assert.equal(look.view.yaw, 0);
+  assert.equal(look.view.pitch, 0);
+  const direction = camera.getWorldDirection(new Vector3());
+  assert.ok(Math.abs(direction.x) < 1e-6, `x ${direction.x}`);
+  assert.ok(Math.abs(direction.y) < 1e-6, `y ${direction.y}`);
+  assert.ok(direction.z < -0.99, `z ${direction.z}`);
+  assert.ok(Math.abs(camera.rotation.x) < 1e-6);
+  assert.ok(Math.abs(camera.rotation.y) < 1e-6);
+});
+
 test("view punch offsets the camera without changing the held aim", () => {
   const camera = new PerspectiveCamera(50, 1, 0.1, 100);
   camera.rotation.order = "YXZ";

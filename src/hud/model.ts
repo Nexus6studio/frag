@@ -76,7 +76,16 @@ export function applyHud(els: HudElements, view: HudReadout, recap?: DeathRecap 
   els.armorStat.style.visibility = view.showArmor ? "visible" : "hidden";
   if (view.showArmor) els.armorStat.removeAttribute("aria-hidden");
   else els.armorStat.setAttribute("aria-hidden", "true");
-  els.death.hidden = view.mode !== "dead";
+  // Playing used to leave this full-viewport button in the hit-test tree:
+  // author `display: flex` beats the user-agent `[hidden]` rule, so a missing
+  // author override swallows clicks. Inline `display: none` wins either way.
+  const dead = view.mode === "dead";
+  els.death.hidden = !dead;
+  els.death.inert = !dead;
+  els.death.style.display = dead ? "" : "none";
+  els.death.style.pointerEvents = dead ? "auto" : "none";
+  if (dead) els.death.removeAttribute("aria-hidden");
+  else els.death.setAttribute("aria-hidden", "true");
   if (recap) els.death.textContent = deathRecapText(recap);
   if (els.cue) {
     const empty = view.ammo === "0+0";

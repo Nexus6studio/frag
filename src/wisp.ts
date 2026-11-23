@@ -98,6 +98,8 @@ export interface WispBolt {
   dz: number;
   age: number;
   serial: number;
+  /** Set when this bolt has applied its one hit. Later overlaps do nothing. */
+  hit: boolean;
 }
 
 export interface WispParticle {
@@ -125,6 +127,13 @@ export interface WispSnapshot {
   timeAlive: number;
   phase: WavePhase;
   enforcers: number;
+  /** Seconds since spawn. Stays 0 until the sim is stepped, so a warning or pause does not burn grace. */
+  time: number;
+  fired: number;
+  hits: number;
+  damageEvents: number;
+  /** Sim time of the first bolt, or null when none has fired. */
+  firstBolt: number | null;
 }
 
 export interface WispSim {
@@ -316,6 +325,9 @@ export function createWispSim(options: WispOptions): WispSim {
   const focus: Vec3 = { x: origin.x, y: origin.y, z: origin.z };
   let time = 0;
   let birth = 0;
+  let boltsHit = 0;
+  let damageEvents = 0;
+  let firstBolt = Number.POSITIVE_INFINITY;
 
   spawnWave(origin);
 
@@ -350,8 +362,10 @@ export function createWispSim(options: WispOptions): WispSim {
     slot.dy = ty / len;
     slot.dz = tz / len;
     slot.age = 0;
+    slot.hit = false;
     slot.serial = birth + 1;
     birth += 1;
+    if (at < firstBolt) firstBolt = at;
   }
 
   function takeBolt(): WispBolt | null {
@@ -473,7 +487,7 @@ export function createWispSim(options: WispOptions): WispSim {
   }
 
   function stepBolt(bolt: WispBolt, dt: number): void {
-    if (!bolt.alive) return;
+    if (!bolt.alive || bolt.hit) return;
     const remain = WISP_BOLT_LIFE - bolt.age;
     if (remain <= 1e-8) {
       bolt.alive = false;
@@ -503,16 +517,19 @@ export function createWispSim(options: WispOptions): WispSim {
     capB.z = focus.z;
     const body = segmentSegment(boltFrom, boltTo, capA, capB);
     const reach = CAPSULE_RADIUS + WISP_BOLT_RADIUS;
-    const playerHit = body.dist <= reach && body.s < stop - 1e-4;
-    if (playerHit) stop = body.s;
+    const grazes = body.dist <= reach;
+    // The closest point of a slice that ends inside the capsule is s === 1.
+    // Requiring s < stop - epsilon skipped that contact, left the bolt alive
+    // inside the body, and let the next substep test the same overlap again.
+    const playerHit = grazes && (body.s < stop - 1e-4 || !blocked);
+    if (playerHit) stop = Math.min(stop, body.s);
 
     bolt.x += bolt.dx * travel * stop;
     bolt.y += bolt.dy * travel * stop;
     bolt.z += bolt.dz * travel * stop;
     bolt.age += step * stop;
-    if (playerHit) {
-      damagePlayer(player, WISP_BOLT_DAMAGE);
-      bolt.alive = false;
+    if (playerHit || (!blocked && overlapsPlayer(bolt.x, bolt.y, bolt.z, reach))) {
+      strike(bolt);
       return;
     }
     if (
@@ -526,6 +543,30 @@ export function createWispSim(options: WispOptions): WispSim {
 
   function stepBolts(dt: number): void {
     for (let i = 0; i < bolts.length; i += 1) stepBolt(bolts[i]!, dt);
+  }
+
+  function overlapsPlayer(x: number, y: number, z: number, reach: number): boolean {
+    const ay = focus.y + CAPSULE_RADIUS;
+    const by = focus.y + CAPSULE_HEIGHT - CAPSULE_RADIUS;
+    const span = by - ay;
+    const t = span > 0 ? clamp((y - ay) / span, 0, 1) : 0;
+    const cy = ay + span * t;
+    const dx = x - focus.x;
+    const dy = y - cy;
+    const dz = z - focus.z;
+    return dx * dx + dy * dy + dz * dz <= reach * reach;
+  }
+
+  function strike(bolt: WispBolt): void {
+    bolt.alive = false;
+    if (bolt.hit) return;
+    bolt.hit = true;
+    if (player.get().hp <= 0) return;
+    const before = player.get().hp;
+    damagePlayer(player, WISP_BOLT_DAMAGE);
+    if (player.get().hp === before) return;
+    boltsHit += 1;
+    damageEvents += 1;
   }
 
   function stepPools(dt: number): void {
@@ -572,7 +613,13 @@ export function createWispSim(options: WispOptions): WispSim {
   function restart(next: Vec3): void {
     director.restart();
     time = 0;
-    for (let i = 0; i < bolts.length; i += 1) bolts[i]!.alive = false;
+    boltsHit = 0;
+    damageEvents = 0;
+    firstBolt = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < bolts.length; i += 1) {
+      bolts[i]!.alive = false;
+      bolts[i]!.hit = false;
+    }
     silence(sparks);
     silence(gibs);
     silence(fluid);
@@ -727,6 +774,8 @@ export function createWispSim(options: WispOptions): WispSim {
         });
       }
       for (let i = 0; i < bolts.length; i += 1) if (bolts[i]!.alive) liveBolts += 1;
+      let fired = 0;
+      for (let i = 0; i < boltCounts.length; i += 1) fired += boltCounts[i] ?? 0;
       return {
         count,
         bolts: liveBolts,
@@ -737,6 +786,11 @@ export function createWispSim(options: WispOptions): WispSim {
         timeAlive: director.timeAlive,
         phase: director.phase,
         enforcers: director.enforcers,
+        time,
+        fired,
+        hits: boltsHit,
+        damageEvents,
+        firstBolt: Number.isFinite(firstBolt) ? firstBolt : null,
       };
     },
   };
@@ -818,7 +872,7 @@ function faceOrigin(drone: Drone, origin: Vec3): void {
 }
 
 function makeBolt(): WispBolt {
-  return { alive: false, x: 0, y: 0, z: 0, dx: 0, dy: 0, dz: 1, age: 0, serial: 0 };
+  return { alive: false, x: 0, y: 0, z: 0, dx: 0, dy: 0, dz: 1, age: 0, serial: 0, hit: false };
 }
 
 function makePool(count: number): WispParticle[] {

@@ -51,7 +51,9 @@ export function mountShell(canvas: HTMLCanvasElement): {
   const ready = required<HTMLElement>("#click-to-play");
   const pauseOverlay = required<HTMLElement>("#pause");
   const continueButton = required<HTMLButtonElement>("#content-warning-continue");
+  const buildHash = required<HTMLElement>("#build-hash");
   const fps = required<HTMLElement>("#fps-readout");
+  buildHash.textContent = `build ${__FRAG_BUILD__}`;
 
   let phase: Phase = "warning";
   let showFps = false;
