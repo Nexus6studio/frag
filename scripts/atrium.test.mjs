@@ -719,6 +719,17 @@ test("the drawn atrium stays inside the triangle and mesh budget", async () => {
     if (columnPos.getX(i) < 0) westHigh += 1;
   }
   assert.ok(eastHigh > 0 && westHigh > 0, `columns above the pads east ${eastHigh} west ${westHigh}`);
+  const lipNear = (mesh, x) => {
+    const pos = mesh.geometry.getAttribute("position");
+    for (let i = 0; i < pos.count; i += 1) {
+      if (Math.abs(pos.getX(i) - x) < 0.25 && Math.abs(pos.getZ(i)) <= 1.7 && pos.getY(i) > 5.2) return true;
+    }
+    return false;
+  };
+  const cyanMesh = view.meshes.find((mesh) => mesh.name === "atrium-cyan");
+  const magentaMesh = view.meshes.find((mesh) => mesh.name === "atrium-magenta");
+  assert.ok(cyanMesh && lipNear(cyanMesh, 11), "east slot lip is not on the cyan glow");
+  assert.ok(magentaMesh && lipNear(magentaMesh, -11), "west slot lip is not on the magenta glow");
   console.log(
     `atrium meshes ${view.meshes.length} triangles ${view.triangles} chevron span ${spanRatio.toFixed(2)} column opacity ${columnMaterial.opacity}`,
   );

@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ATRIUM_SPAWN, CATWALK_Y, GROUND_Y, capsuleClear, createAtriumHull } from "../src/atrium.ts";
+import {
+  ATRIUM_SPAWN,
+  CATWALK_Y,
+  CONCOURSE,
+  GROUND_Y,
+  JUMP_LANE_HALF,
+  RING_INNER,
+  capsuleClear,
+  createAtriumHull,
+  inJumpSlot,
+} from "../src/atrium.ts";
 import { createFight } from "../src/fight.ts";
 import { createHitboxWorld } from "../src/hitbox.ts";
 import { createPlayerState } from "../src/player/state.ts";
@@ -83,6 +93,48 @@ test("an enforcer climbs a ramp to the player and skirts the well", () => {
   assert.equal(dipped, false, "cut through the well");
   assert.ok(Math.hypot(arrived.x - north.x, arrived.z - north.z) < 8.5, "stuck on the ring");
   assert.ok(arrived.y < 1.6, `left the ground ring (y ${arrived.y})`);
+});
+
+test("an enforcer pathing the catwalk past a jump slot stays at catwalk height", () => {
+  const hull = createAtriumHull();
+  const player = createPlayerState({ hp: 5000 });
+  for (const side of [1, -1]) {
+    const sim = createEnforcerSim({ hull, player, hitboxes: createHitboxWorld(), grace: 0 });
+    const x = 14.45 * side;
+    sim.place(0, { x, y: CATWALK_Y, z: 8 });
+    const goal = { x, y: CATWALK_Y, z: -14 };
+    let minY = CATWALK_Y;
+    let entered = false;
+    let passed = false;
+    for (let i = 0; i < Math.round(16 / DT); i += 1) {
+      sim.update(DT, goal);
+      const pos = sim.units[0].position;
+      if (pos.y < minY) minY = pos.y;
+      if (inJumpSlot(pos.x, pos.z)) entered = true;
+      if (pos.z < -2 && pos.y > CATWALK_Y - 0.2) passed = true;
+      assert.equal(enforcerInsideVolume(pos), true);
+    }
+    assert.equal(passed, true, `side ${side} did not pass the slot`);
+    assert.ok(minY >= CATWALK_Y - 0.2, `side ${side} dropped to ${minY.toFixed(2)}`);
+    assert.equal(entered, false, `side ${side} entered the jump slot`);
+    console.log(`enforcer slot pass side ${side} min y ${minY.toFixed(2)}`);
+
+    const bait = createEnforcerSim({ hull, player, hitboxes: createHitboxWorld(), grace: 0 });
+    bait.place(0, { x: side * (RING_INNER + 0.45), y: CATWALK_Y, z: 0 });
+    bait.hurt(0, 25);
+    const shelf = { x: side * (CONCOURSE + 0.4), y: CATWALK_Y, z: 0 };
+    let baitMin = CATWALK_Y;
+    let baitEntered = false;
+    for (let i = 0; i < Math.round(2 / DT); i += 1) {
+      bait.update(DT, shelf);
+      const pos = bait.units[0].position;
+      if (pos.y < baitMin) baitMin = pos.y;
+      if (inJumpSlot(pos.x, pos.z)) baitEntered = true;
+    }
+    assert.ok(baitMin >= CATWALK_Y - 0.2, `side ${side} sidestep dropped to ${baitMin.toFixed(2)}`);
+    assert.equal(baitEntered, false, `side ${side} sidestep entered the slot`);
+    assert.ok(Math.abs(shelf.z) <= JUMP_LANE_HALF);
+  }
 });
 
 test("cruise speed is 4.2 m/s and the body does not jump", () => {

@@ -5,6 +5,8 @@
 // so atrium ramps and 0.30 m stairs are the same surfaces the player climbs.
 // The nav graph is the route the atrium circuit already proves: around the
 // well, up a ramp or a stair, along the catwalk, never across a parapet.
+// Jump-pad shelves are a player drop back into the well. A hound does not
+// step onto them.
 //
 // The stun-blaster is a short hitscan cone. The atrium hull is tested first,
 // so a round stops on a wall. Death is a collapse, a spark pool, and a blood
@@ -20,6 +22,7 @@ import {
   MAP_HALF,
   WELL_HALF,
   capsuleClear,
+  inJumpSlot,
 } from "./atrium.ts";
 import type { HitboxHandle, HitboxWorld } from "./hitbox.ts";
 import { playerHitboxes } from "./hitbox.ts";
@@ -319,6 +322,14 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
       remember(unit, feet, hull);
       const intent = steerUnit(unit, hull, nav.nodes, edges, dist, prev, used);
       const next = stepMovement(unit.body, intent, dt, hull);
+      // The shelf is the player's drop. Refuse a step that would put the hound on it.
+      if (inJumpSlot(next.position.x, next.position.z) && !inJumpSlot(unit.body.position.x, unit.body.position.z)) {
+        next.position.x = unit.body.position.x;
+        next.position.y = unit.body.position.y;
+        next.position.z = unit.body.position.z;
+        next.velocity.x = 0;
+        next.velocity.z = 0;
+      }
       copyMove(unit.body, next);
       syncChest(unit);
       if (!(unit.grace > 0)) {
@@ -654,6 +665,7 @@ function routeClear(
     const t = i / steps;
     const x = ax + (bx - ax) * t;
     const z = az + (bz - az) * t;
+    if (inJumpSlot(x, z)) return false;
     const expect = ay + (by - ay) * t;
     const y = floorY(x, Math.max(ay, by, expect) + 1.6, z, hull);
     // The well floor is 0.8 m under the ring, so a straight line across it fails.

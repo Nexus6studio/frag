@@ -152,6 +152,16 @@ export const JUMP_PAD_RUN = 8.5;
 /** Half-width of the east and west rail slots the pads launch through. */
 export const JUMP_LANE_HALF = 1.7;
 
+/**
+ * The lowered shelf in front of a jump pad. The player lands here and can
+ * drop back into the well. Enforcers stay off it.
+ */
+export function inJumpSlot(x: number, z: number): boolean {
+  if (Math.abs(z) > JUMP_LANE_HALF) return false;
+  const ax = Math.abs(x);
+  return ax >= CONCOURSE - 0.02 && ax <= RING_INNER - 0.02;
+}
+
 export interface AtriumJumpPad {
   id: "east" | "west";
   /** Drawn center, on the well floor. */

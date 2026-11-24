@@ -27,6 +27,7 @@ import {
   CEILING_Y,
   CONCOURSE,
   GROUND_Y,
+  JUMP_LANE_HALF,
   MAP_HALF,
   PARAPET_Y,
   RING_INNER,
@@ -383,6 +384,17 @@ function addChannels(cyan: Soup, magenta: Soup): void {
   cyan.box(-10, 10, lane, lane + 0.03, -14.52, -14.35);
   cyan.box(-14.52, -14.35, lane, lane + 0.03, -10, 10);
   cyan.box(14.35, 14.52, lane, lane + 0.03, -10, 10);
+
+  // Slot lips. The well-side edge of each lowered shelf, drawn with the
+  // existing glow so the drop reads on purpose. No hull, so it cannot block.
+  const lipZ0 = -JUMP_LANE_HALF + 0.04;
+  const lipZ1 = JUMP_LANE_HALF - 0.04;
+  const lipY0 = CATWALK_Y + 0.015;
+  const lipY1 = CATWALK_Y + 0.045;
+  cyan.box(CONCOURSE + 0.04, CONCOURSE + 0.2, lipY0, lipY1, lipZ0, lipZ1);
+  cyan.box(CONCOURSE - 0.05, CONCOURSE - 0.012, CATWALK_Y - 0.16, CATWALK_Y + 0.02, lipZ0, lipZ1);
+  magenta.box(-CONCOURSE - 0.2, -CONCOURSE - 0.04, lipY0, lipY1, lipZ0, lipZ1);
+  magenta.box(-CONCOURSE + 0.012, -CONCOURSE + 0.05, CATWALK_Y - 0.16, CATWALK_Y + 0.02, lipZ0, lipZ1);
 }
 
 function addBeacons(soup: Soup): void {
