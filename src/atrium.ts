@@ -9,6 +9,8 @@
 // Layout, centered on the origin, +X east, +Z south, -Z north:
 //   well          10×10 m at y = 0, under the implicit ground plane
 //   jump pads     east and west edges of the well, one arc onto each catwalk
+//   jump lanes    the east and west rails drop to the catwalk for |z| <= 1.7,
+//                 so the lower arc can land on that shelf instead of the outer wall
 //   concourse     6 m ring around the well, at y = 0.8
 //   parapet       2 m band at |coord| 11–13, top y = 6.6 (inner rail)
 //   catwalk       outer 3 m (|coord| 13–16) at y = 5.3
@@ -21,7 +23,6 @@
 import {
   CAPSULE_HEIGHT,
   CAPSULE_RADIUS,
-  PLANAR_CAP,
   STEP_HEIGHT,
   createMoveState,
   createMover,
@@ -140,17 +141,33 @@ export const ATRIUM_RAMPS: readonly AtriumRamp[] = [
 ];
 
 /**
- * Vertical speed of a well jump pad. With gravity 20 this crests near 7.1 m,
- * which clears the 6.6 m parapet and keeps the capsule head under the ceiling.
+ * Launch velocity of a well jump pad. Gravity stays 20. 15.6 m/s up crests
+ * near 6.08 m, so the capsule top stays at least 1 m under the 8.95 m ceiling.
+ * 8.5 m/s horizontal, under the 9.2 m/s planar cap, lands on the lowered rail
+ * about 3 m in from the outer wall. The rail in front of each pad is cut down
+ * to the catwalk; a crest this low cannot clear the 6.6 m parapet.
  */
-export const JUMP_PAD_LIFT = 16.8;
+export const JUMP_PAD_LIFT = 15.6;
+export const JUMP_PAD_RUN = 8.5;
+/** Half-width of the east and west rail slots the pads launch through. */
+export const JUMP_LANE_HALF = 1.7;
+
+/**
+ * The lowered shelf in front of a jump pad. The player lands here and can
+ * drop back into the well. Enforcers stay off it.
+ */
+export function inJumpSlot(x: number, z: number): boolean {
+  if (Math.abs(z) > JUMP_LANE_HALF) return false;
+  const ax = Math.abs(x);
+  return ax >= CONCOURSE - 0.02 && ax <= RING_INNER - 0.02;
+}
 
 export interface AtriumJumpPad {
   id: "east" | "west";
   /** Drawn center, on the well floor. */
   x: number;
   z: number;
-  /** Unit bias toward that side's catwalk. One axis is zero so the speed stays at the planar cap. */
+  /** Unit bias toward that side's catwalk. One axis is zero so the launch speed stays JUMP_PAD_RUN. */
   dirX: number;
   dirZ: number;
   minX: number;
@@ -161,9 +178,37 @@ export interface AtriumJumpPad {
 
 /** East and west edges of the sunken well. The center ammo pad at the origin stays clear. */
 export const ATRIUM_JUMP_PADS: readonly AtriumJumpPad[] = [
-  { id: "east", x: 3.8, z: 0, dirX: 1, dirZ: 0, minX: 3.5, maxX: 4.1, minZ: -0.7, maxZ: 0.7 },
-  { id: "west", x: -3.8, z: 0, dirX: -1, dirZ: 0, minX: -4.1, maxX: -3.5, minZ: -0.7, maxZ: 0.7 },
+  { id: "east", x: 3.95, z: 0, dirX: 1, dirZ: 0, minX: 3.15, maxX: 4.75, minZ: -1.2, maxZ: 1.2 },
+  { id: "west", x: -3.95, z: 0, dirX: -1, dirZ: 0, minX: -4.75, maxX: -3.15, minZ: -1.2, maxZ: 1.2 },
 ];
+
+export interface ParapetRun {
+  x0: number;
+  x1: number;
+  y1: number;
+  z0: number;
+  z1: number;
+}
+
+/**
+ * East and west rails. The center band is a catwalk-height shelf so a jump
+ * pad arc crests under the ceiling and still has a floor to land on.
+ */
+export function sideParapetRuns(): ParapetRun[] {
+  const runs: ParapetRun[] = [];
+  const add = (x0: number, x1: number, z0: number, z1: number): void => {
+    const za = Math.min(z0, z1);
+    const zb = Math.max(z0, z1);
+    const lane0 = Math.max(za, -JUMP_LANE_HALF);
+    const lane1 = Math.min(zb, JUMP_LANE_HALF);
+    if (za < lane0 - 1e-6) runs.push({ x0, x1, y1: PARAPET_Y, z0: za, z1: lane0 });
+    if (lane1 > lane0 + 1e-6) runs.push({ x0, x1, y1: CATWALK_Y, z0: lane0, z1: lane1 });
+    if (zb > lane1 + 1e-6) runs.push({ x0, x1, y1: PARAPET_Y, z0: lane1, z1: zb });
+  };
+  add(CONCOURSE, RING_INNER, -CONCOURSE, STAIR_LAND_Z0);
+  add(-RING_INNER, -CONCOURSE, -CONCOURSE, STAIR_LAND_Z0);
+  return runs;
+}
 
 export const ATRIUM_PADS: readonly AtriumPad[] = [
   { kind: "ammo", position: { x: 0, y: 0, z: 0 } },
@@ -240,8 +285,9 @@ function buildHull(): Hull {
   box(boxes, 10.2, RING_INNER, 0, PARAPET_Y, -RING_INNER, -CONCOURSE);
   // East and west parapets stop at the landing so the stair doorway stays open
   // up to the south parapet. The landing solid fills that doorway at catwalk height.
-  box(boxes, CONCOURSE, RING_INNER, 0, PARAPET_Y, -CONCOURSE, STAIR_LAND_Z0);
-  box(boxes, -RING_INNER, -CONCOURSE, 0, PARAPET_Y, -CONCOURSE, STAIR_LAND_Z0);
+  for (const run of sideParapetRuns()) {
+    box(boxes, run.x0, run.x1, 0, run.y1, run.z0, run.z1);
+  }
 
   for (const ramp of ATRIUM_RAMPS) {
     ramps.push({
@@ -350,7 +396,7 @@ function padUnder(feet: Vec3): AtriumJumpPad | null {
 
 /**
  * A grounded step whose feet are on a pad replaces the velocity with one
- * fixed arc: full planar cap toward the near catwalk, plus the lift. The next
+ * fixed arc: JUMP_PAD_RUN toward the near catwalk, plus the lift. The next
  * step is airborne, so standing on the pad does not fire again until a landing.
  */
 function launchFromPad(before: MoveState, after: MoveState): MoveState | null {
@@ -360,9 +406,9 @@ function launchFromPad(before: MoveState, after: MoveState): MoveState | null {
   return {
     position: { x: after.position.x, y: after.position.y, z: after.position.z },
     velocity: {
-      x: pad.dirX * PLANAR_CAP,
+      x: pad.dirX * JUMP_PAD_RUN,
       y: JUMP_PAD_LIFT,
-      z: pad.dirZ * PLANAR_CAP,
+      z: pad.dirZ * JUMP_PAD_RUN,
     },
     grounded: false,
     timeOnGround: 0,

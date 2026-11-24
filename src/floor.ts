@@ -4,6 +4,7 @@
 // on the lips, ramps, and joins so those edges read without lighting the room.
 
 import {
+  AdditiveBlending,
   BufferGeometry,
   CanvasTexture,
   DoubleSide,
@@ -26,6 +27,7 @@ import {
   CEILING_Y,
   CONCOURSE,
   GROUND_Y,
+  JUMP_LANE_HALF,
   MAP_HALF,
   PARAPET_Y,
   RING_INNER,
@@ -34,7 +36,9 @@ import {
   STAIR_LAND_Z0,
   STAIR_RISE,
   WELL_HALF,
+  sideParapetRuns,
   stairCollisionBoxes,
+  type AtriumJumpPad,
   type AtriumPad,
   type AtriumRamp,
   type AtriumStair,
@@ -300,8 +304,9 @@ function addStructure(floor: Soup, shell: Soup, ramps: Soup): void {
   shell.box(-ring, -10.2, 0, PARAPET_Y, -ring, -c);
   shell.box(-7.6, 7.6, 0, PARAPET_Y, -ring, -c);
   shell.box(10.2, ring, 0, PARAPET_Y, -ring, -c);
-  shell.box(c, ring, 0, PARAPET_Y, -c, STAIR_LAND_Z0);
-  shell.box(-ring, -c, 0, PARAPET_Y, -c, STAIR_LAND_Z0);
+  for (const run of sideParapetRuns()) {
+    shell.box(run.x0, run.x1, 0, run.y1, run.z0, run.z1);
+  }
 
   for (const ramp of ATRIUM_RAMPS) {
     addRamp(ramps, ramp);
@@ -379,6 +384,17 @@ function addChannels(cyan: Soup, magenta: Soup): void {
   cyan.box(-10, 10, lane, lane + 0.03, -14.52, -14.35);
   cyan.box(-14.52, -14.35, lane, lane + 0.03, -10, 10);
   cyan.box(14.35, 14.52, lane, lane + 0.03, -10, 10);
+
+  // Slot lips. The well-side edge of each lowered shelf, drawn with the
+  // existing glow so the drop reads on purpose. No hull, so it cannot block.
+  const lipZ0 = -JUMP_LANE_HALF + 0.04;
+  const lipZ1 = JUMP_LANE_HALF - 0.04;
+  const lipY0 = CATWALK_Y + 0.015;
+  const lipY1 = CATWALK_Y + 0.045;
+  cyan.box(CONCOURSE + 0.04, CONCOURSE + 0.2, lipY0, lipY1, lipZ0, lipZ1);
+  cyan.box(CONCOURSE - 0.05, CONCOURSE - 0.012, CATWALK_Y - 0.16, CATWALK_Y + 0.02, lipZ0, lipZ1);
+  magenta.box(-CONCOURSE - 0.2, -CONCOURSE - 0.04, lipY0, lipY1, lipZ0, lipZ1);
+  magenta.box(-CONCOURSE + 0.012, -CONCOURSE + 0.05, CATWALK_Y - 0.16, CATWALK_Y + 0.02, lipZ0, lipZ1);
 }
 
 function addBeacons(soup: Soup): void {
@@ -767,111 +783,280 @@ function addTrim(trim: Soup): void {
   addSoffitLips(trim);
 }
 
-const CHEVRON_CYAN: RGB = [0, 0.898, 1];
-const CHEVRON_MAGENTA: RGB = [1, 0.18, 0.624];
-
 type RGB = readonly [number, number, number];
 
-function pushTri(
-  position: number[],
-  color: number[],
+/** Chevron scroll and column rise. One full cycle is about a second. */
+export const JUMP_PAD_MARK_PERIOD_MS = 1000;
+
+const CHEVRON_COUNT = 4;
+const CHEVRON_DEPTH = 0.26;
+const SPAN_RATIO = 0.7;
+const PLATE_EAST: RGB = [0, 1, 1];
+const PLATE_WEST: RGB = [1, 0, 1];
+const COLUMN_TOP = 3.8;
+const PARTICLE_COUNT = 6;
+
+export function jumpPadMarkPhase(nowMs: number): number {
+  const period = JUMP_PAD_MARK_PERIOD_MS;
+  const wrapped = ((nowMs % period) + period) % period;
+  return wrapped / period;
+}
+
+function writeTri(
+  position: Float32Array,
+  color: Float32Array,
+  offset: number,
   a: Triple,
   b: Triple,
   c: Triple,
   rgb: RGB,
-): void {
-  position.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
-  color.push(rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]);
+): number {
+  const verts = [a, b, c];
+  for (const vert of verts) {
+    position[offset] = vert[0];
+    position[offset + 1] = vert[1];
+    position[offset + 2] = vert[2];
+    color[offset] = rgb[0];
+    color[offset + 1] = rgb[1];
+    color[offset + 2] = rgb[2];
+    offset += 3;
+  }
+  return offset;
 }
 
-function pushQuad(
-  position: number[],
-  color: number[],
+function writeQuad(
+  position: Float32Array,
+  color: Float32Array,
+  offset: number,
   a: Triple,
   b: Triple,
   c: Triple,
   d: Triple,
   rgb: RGB,
-): void {
-  pushTri(position, color, a, b, c, rgb);
-  pushTri(position, color, a, c, d, rgb);
+): number {
+  offset = writeTri(position, color, offset, a, b, c, rgb);
+  return writeTri(position, color, offset, a, c, d, rgb);
 }
 
-/** One outward-pointing mark. `dir` is +1 toward +X. */
-function addChevron(
-  position: number[],
-  color: number[],
-  cx: number,
-  cz: number,
-  dir: number,
-  along: number,
+function writeBox(
+  position: Float32Array,
+  color: Float32Array,
+  offset: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  z0: number,
+  z1: number,
   rgb: RGB,
-): void {
-  const y = 0.062;
-  const tail = cx + dir * along;
-  const tip = cx + dir * (along + 0.2);
-  const near = 0.045;
-  const far = 0.3;
-  pushQuad(
+): number {
+  offset = writeQuad(position, color, offset, [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], rgb);
+  offset = writeQuad(position, color, offset, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], rgb);
+  offset = writeQuad(position, color, offset, [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1], rgb);
+  offset = writeQuad(position, color, offset, [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0], rgb);
+  offset = writeQuad(position, color, offset, [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], rgb);
+  return writeQuad(position, color, offset, [x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], rgb);
+}
+
+/** Tip positions along the launch axis. Phase 0 spans SPAN_RATIO of the plate. */
+function chevronTips(pad: AtriumJumpPad, phase: number): number[] {
+  const alongMin = pad.dirX > 0 ? pad.minX : -pad.maxX;
+  const alongMax = pad.dirX > 0 ? pad.maxX : -pad.minX;
+  const span = SPAN_RATIO * (alongMax - alongMin);
+  const travel = ((span - CHEVRON_DEPTH) * CHEVRON_COUNT) / (CHEVRON_COUNT - 1);
+  const spacing = travel / CHEVRON_COUNT;
+  const center = (alongMin + alongMax) / 2;
+  const tip0 = center - span / 2 + CHEVRON_DEPTH;
+  const shift = phase * spacing;
+  const tips: number[] = [];
+  for (let i = 0; i < CHEVRON_COUNT; i += 1) {
+    const raw = tip0 + i * spacing + shift;
+    tips.push(tip0 + ((((raw - tip0) % travel) + travel) % travel));
+  }
+  return tips;
+}
+
+function writeChevron(
+  position: Float32Array,
+  color: Float32Array,
+  offset: number,
+  tipAlong: number,
+  dirX: number,
+  z: number,
+  rgb: RGB,
+): number {
+  const y = 0.078;
+  const tipX = dirX * tipAlong;
+  const tailX = tipX - dirX * CHEVRON_DEPTH;
+  const near = 0.05;
+  const far = 0.22;
+  offset = writeQuad(
     position,
     color,
-    [tail, y, cz + near],
-    [tail, y, cz + far],
-    [tip, y, cz + 0.02],
-    [tip, y, cz - 0.02],
+    offset,
+    [tailX, y, z + near],
+    [tailX, y, z + far],
+    [tipX, y, z + 0.015],
+    [tipX, y, z - 0.015],
     rgb,
   );
-  pushQuad(
+  return writeQuad(
     position,
     color,
-    [tail, y, cz - far],
-    [tail, y, cz - near],
-    [tip, y, cz + 0.02],
-    [tip, y, cz - 0.02],
+    offset,
+    [tailX, y, z - far],
+    [tailX, y, z - near],
+    [tipX, y, z + 0.015],
+    [tipX, y, z - 0.015],
     rgb,
   );
 }
 
-/** Both well pads, one mesh. The material color pulses so the chevrons breathe. */
-function jumpPadMesh(): { mesh: Mesh; triangles: number } {
-  const position: number[] = [];
-  const color: number[] = [];
+function paintPads(position: Float32Array, color: Float32Array, phase: number): void {
+  let offset = 0;
+  const pulse = 0.4 + 0.6 * (0.5 - 0.5 * Math.cos(phase * Math.PI * 2));
+  const mark: RGB = [pulse, pulse, pulse];
   for (const pad of ATRIUM_JUMP_PADS) {
-    const plate: RGB = pad.dirX > 0 ? [0, 0.22, 0.28] : [0.28, 0.05, 0.16];
-    pushQuad(
+    const plate = pad.dirX > 0 ? PLATE_EAST : PLATE_WEST;
+    offset = writeBox(
       position,
       color,
-      [pad.minX - 0.06, 0.03, pad.minZ - 0.06],
-      [pad.maxX + 0.06, 0.03, pad.minZ - 0.06],
-      [pad.maxX + 0.06, 0.03, pad.maxZ + 0.06],
-      [pad.minX - 0.06, 0.03, pad.maxZ + 0.06],
+      offset,
+      pad.minX,
+      pad.maxX,
+      0.02,
+      0.05,
+      pad.minZ,
+      pad.maxZ,
       plate,
     );
-    const marks: readonly RGB[] =
-      pad.dirX > 0
-        ? [CHEVRON_CYAN, CHEVRON_MAGENTA, CHEVRON_CYAN]
-        : [CHEVRON_MAGENTA, CHEVRON_CYAN, CHEVRON_MAGENTA];
-    const shifts = [-0.28, -0.02, 0.24];
-    for (let i = 0; i < shifts.length; i += 1) {
-      addChevron(position, color, pad.x, pad.z, pad.dirX, shifts[i] ?? 0, marks[i] ?? CHEVRON_CYAN);
+    for (const tip of chevronTips(pad, phase)) {
+      offset = writeChevron(position, color, offset, tip, pad.dirX, pad.z, mark);
     }
   }
+}
+
+function paintColumns(position: Float32Array, color: Float32Array, phase: number): void {
+  let offset = 0;
+  const rise = COLUMN_TOP - 0.4;
+  for (const pad of ATRIUM_JUMP_PADS) {
+    const plate = pad.dirX > 0 ? PLATE_EAST : PLATE_WEST;
+    const half = 0.07;
+    offset = writeQuad(
+      position,
+      color,
+      offset,
+      [pad.x - half, 0.06, pad.z],
+      [pad.x + half, 0.06, pad.z],
+      [pad.x + half, COLUMN_TOP, pad.z],
+      [pad.x - half, COLUMN_TOP, pad.z],
+      plate,
+    );
+    offset = writeQuad(
+      position,
+      color,
+      offset,
+      [pad.x, 0.06, pad.z - half],
+      [pad.x, 0.06, pad.z + half],
+      [pad.x, COLUMN_TOP, pad.z + half],
+      [pad.x, COLUMN_TOP, pad.z - half],
+      plate,
+    );
+    const speck = 0.045;
+    for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+      const y = 0.4 + ((((i / PARTICLE_COUNT + phase) % 1) + 1) % 1) * rise;
+      offset = writeQuad(
+        position,
+        color,
+        offset,
+        [pad.x - speck, y, pad.z - speck],
+        [pad.x + speck, y, pad.z - speck],
+        [pad.x + speck, y + 0.02, pad.z + speck],
+        [pad.x - speck, y + 0.02, pad.z + speck],
+        plate,
+      );
+    }
+  }
+}
+
+function markMesh(
+  name: string,
+  floats: number,
+  paint: (position: Float32Array, color: Float32Array, phase: number) => void,
+  material: MeshBasicMaterial,
+): Mesh {
+  const position = new Float32Array(floats);
+  const color = new Float32Array(floats);
+  paint(position, color, 0);
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new Float32BufferAttribute(position, 3));
   geometry.setAttribute("color", new Float32BufferAttribute(color, 3));
-  const material = new MeshBasicMaterial({
-    vertexColors: true,
-    toneMapped: false,
-    side: DoubleSide,
-  });
-  material.name = "atrium-jump-pads";
   const mesh = new Mesh(geometry, material);
-  mesh.name = "atrium-jump-pads";
+  mesh.name = name;
+  material.name = name;
   mesh.onBeforeRender = () => {
-    const wave = 0.5 + 0.5 * Math.sin(performance.now() * 0.006);
-    material.color.setScalar(0.42 + 0.58 * wave);
+    applyJumpPadMarks(mesh, jumpPadMarkPhase(performance.now()));
   };
-  return { mesh, triangles: position.length / 9 };
+  return mesh;
+}
+
+/** Rewrites chevrons or the rising column for one phase in 0..1. */
+export function applyJumpPadMarks(mesh: Mesh, phase: number): void {
+  const position = mesh.geometry.getAttribute("position");
+  const color = mesh.geometry.getAttribute("color");
+  if (!position || !color) return;
+  const positions = position.array as Float32Array;
+  const colors = color.array as Float32Array;
+  if (mesh.name === "atrium-jump-columns") paintColumns(positions, colors, phase);
+  else paintPads(positions, colors, phase);
+  position.needsUpdate = true;
+  color.needsUpdate = true;
+}
+
+function padFloatCount(): number {
+  const boxVerts = 36;
+  const chevronVerts = CHEVRON_COUNT * 12;
+  return ATRIUM_JUMP_PADS.length * (boxVerts + chevronVerts) * 3;
+}
+
+function columnFloatCount(): number {
+  const crossVerts = 12;
+  const particleVerts = PARTICLE_COUNT * 6;
+  return ATRIUM_JUMP_PADS.length * (crossVerts + particleVerts) * 3;
+}
+
+/** Saturated plates plus chevrons that scroll along the launch. */
+function jumpPadMesh(): { mesh: Mesh; triangles: number } {
+  const mesh = markMesh(
+    "atrium-jump-pads",
+    padFloatCount(),
+    paintPads,
+    new MeshBasicMaterial({
+      vertexColors: true,
+      toneMapped: false,
+      side: DoubleSide,
+    }),
+  );
+  return { mesh, triangles: padFloatCount() / 9 };
+}
+
+/** Thin additive column and rising specks. Depth is not written, so it cannot hide a target. */
+function jumpColumnMesh(): { mesh: Mesh; triangles: number } {
+  const mesh = markMesh(
+    "atrium-jump-columns",
+    columnFloatCount(),
+    paintColumns,
+    new MeshBasicMaterial({
+      vertexColors: true,
+      toneMapped: false,
+      transparent: true,
+      opacity: 0.28,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      side: DoubleSide,
+    }),
+  );
+  return { mesh, triangles: columnFloatCount() / 9 };
 }
 
 export function buildAtriumView(): AtriumView {
@@ -888,6 +1073,7 @@ export function buildAtriumView(): AtriumView {
   addBeacons(amber);
   const pads = buildPadViews();
   const jumpPads = jumpPadMesh();
+  const jumpColumns = jumpColumnMesh();
 
   const panel = createPanelTexture();
   const panels = shellMaterial(panel);
@@ -902,6 +1088,7 @@ export function buildAtriumView(): AtriumView {
   ];
   for (const pad of pads.pads) meshes.push(pad.mesh);
   meshes.push(jumpPads.mesh);
+  meshes.push(jumpColumns.mesh);
   let triangles =
     floor.triangles +
     shell.triangles +
@@ -911,7 +1098,8 @@ export function buildAtriumView(): AtriumView {
     magenta.triangles +
     amber.triangles +
     pads.triangles +
-    jumpPads.triangles;
+    jumpPads.triangles +
+    jumpColumns.triangles;
   const extra = { count: 0 };
   addSigns(meshes, extra);
   triangles += extra.count;

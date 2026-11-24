@@ -158,19 +158,24 @@ test("both center-well jump pads land on the upper ring", () => {
     assert.ok(spawnGap > 4, `${pad.id} is ${spawnGap.toFixed(2)} m from spawn`);
   }
 
+  const ceiling = CEILING_Y - 0.05;
   const ride = (start, intent, label) => {
     let state = createMoveState(start);
     let launches = 0;
     let peak = start.y;
+    let peakAt = { ...start };
     let landed = null;
     const limit = Math.round(3.5 / SIM_DT);
     for (let i = 0; i < limit; i += 1) {
       state = stepAtrium(state, intent, SIM_DT, () => {
         launches += 1;
       });
-      if (state.position.y > peak) peak = state.position.y;
+      if (state.position.y > peak) {
+        peak = state.position.y;
+        peakAt = { ...state.position };
+      }
       const head = state.position.y + CAPSULE_HEIGHT;
-      assert.ok(head < CEILING_Y - 0.05, `${label} head ${head.toFixed(2)} met the ceiling`);
+      assert.ok(head < ceiling, `${label} head ${head.toFixed(2)} met the ceiling`);
       assert.equal(needsRespawn(state.position), false, `${label} left the atrium`);
       assert.ok(Math.abs(state.position.x) <= MAP_HALF, `${label} x ${state.position.x}`);
       assert.ok(Math.abs(state.position.z) <= MAP_HALF, `${label} z ${state.position.z}`);
@@ -182,8 +187,20 @@ test("both center-well jump pads land on the upper ring", () => {
     assert.ok(peak >= 5.3, `${label} peaked at ${peak}`);
     assert.ok(landed, `${label} did not land on the upper ring`);
     assert.ok(landed.y >= 5.3 && landed.y < PARAPET_Y - 0.4, `${label} landed at y ${landed.y}`);
-    assert.ok(Math.abs(landed.x) >= RING_INNER - 0.05, `${label} landed at x ${landed.x}, short of the catwalk`);
+    const clearance = ceiling - (peak + CAPSULE_HEIGHT);
+    assert.ok(
+      clearance >= 1.0,
+      `${label} apex clearance ${clearance.toFixed(2)} m (apex y ${peak.toFixed(2)}, ceiling ${ceiling})`,
+    );
+    const wall = Math.min(MAP_HALF - Math.abs(landed.x), MAP_HALF - Math.abs(landed.z));
+    assert.ok(
+      wall >= 2.5 && wall <= 4,
+      `${label} landed ${wall.toFixed(2)} m from the outer wall at |x| ${Math.abs(landed.x).toFixed(2)} z ${landed.z.toFixed(2)}`,
+    );
     assert.equal(state.grounded, true, `${label} was still airborne`);
+    console.log(
+      `${label} apex y ${peak.toFixed(2)} at |x| ${Math.abs(peakAt.x).toFixed(2)} clearance ${clearance.toFixed(2)} land |x| ${Math.abs(landed.x).toFixed(2)} y ${landed.y.toFixed(2)} wall ${wall.toFixed(2)}`,
+    );
     return landed;
   };
 
@@ -622,25 +639,100 @@ test("a standing hop from rest clears the 0.8 m well lip", () => {
 });
 
 test("the drawn atrium stays inside the triangle and mesh budget", async () => {
-  const { buildAtriumView } = await import("../src/floor.ts");
+  const { AdditiveBlending } = await import("three");
+  const { applyJumpPadMarks, buildAtriumView, JUMP_PAD_MARK_PERIOD_MS, jumpPadMarkPhase } = await import(
+    "../src/floor.ts"
+  );
   const view = buildAtriumView();
   assert.ok(view.triangles > 100 && view.triangles <= 50_000, `triangles ${view.triangles}`);
   assert.ok(view.meshes.length > 0 && view.meshes.length <= 16, `meshes ${view.meshes.length}`);
   const jumpPads = view.meshes.find((mesh) => mesh.name === "atrium-jump-pads");
-  assert.ok(jumpPads, "jump pad chevrons are not drawn");
+  assert.ok(jumpPads, "jump pad plates are not drawn");
+  applyJumpPadMarks(jumpPads, 0);
+  const position = jumpPads.geometry.getAttribute("position");
   const colors = jumpPads.geometry.getAttribute("color");
-  assert.ok(colors && colors.count > 12);
+  assert.ok(position && colors && colors.count > 12);
   let cyan = 0;
   let magenta = 0;
+  let plateMin = Infinity;
+  let plateMax = -Infinity;
+  let markMin = Infinity;
+  let markMax = -Infinity;
   for (let i = 0; i < colors.count; i += 1) {
     const r = colors.getX(i);
     const g = colors.getY(i);
     const b = colors.getZ(i);
-    if (b > 0.8 && g > 0.7 && r < 0.2) cyan += 1;
+    const x = position.getX(i);
+    const y = position.getY(i);
+    if (b > 0.8 && g > 0.7 && r < 0.2) {
+      cyan += 1;
+      if (x > 0 && y < 0.06) {
+        if (x < plateMin) plateMin = x;
+        if (x > plateMax) plateMax = x;
+      }
+    }
     if (r > 0.8 && b > 0.4 && g < 0.4) magenta += 1;
+    if (x > 0 && y > 0.07 && r > 0.2 && g > 0.2 && b > 0.2) {
+      if (x < markMin) markMin = x;
+      if (x > markMax) markMax = x;
+    }
   }
-  assert.ok(cyan > 0 && magenta > 0, `chevron colors cyan ${cyan} magenta ${magenta}`);
-  console.log(`atrium meshes ${view.meshes.length} triangles ${view.triangles}`);
+  assert.ok(cyan > 0 && magenta > 0, `plate colors cyan ${cyan} magenta ${magenta}`);
+  const plateLength = plateMax - plateMin;
+  const markSpan = markMax - markMin;
+  const spanRatio = markSpan / plateLength;
+  assert.ok(
+    spanRatio > 0.64 && spanRatio < 0.76,
+    `chevrons span ${spanRatio.toFixed(2)} of the east pad (${markSpan.toFixed(2)} / ${plateLength.toFixed(2)})`,
+  );
+  assert.ok(JUMP_PAD_MARK_PERIOD_MS >= 900 && JUMP_PAD_MARK_PERIOD_MS <= 1100, `period ${JUMP_PAD_MARK_PERIOD_MS}`);
+  assert.equal(jumpPadMarkPhase(0), 0);
+  assert.equal(jumpPadMarkPhase(JUMP_PAD_MARK_PERIOD_MS), 0);
+  assert.ok(Math.abs(jumpPadMarkPhase(JUMP_PAD_MARK_PERIOD_MS / 2) - 0.5) < 1e-6);
+  const before = position.getX(0);
+  applyJumpPadMarks(jumpPads, 0.35);
+  const shifted = [];
+  for (let i = 0; i < position.count; i += 1) {
+    if (position.getY(i) > 0.07 && position.getX(i) > 0) shifted.push(position.getX(i));
+  }
+  applyJumpPadMarks(jumpPads, 0);
+  const back = [];
+  for (let i = 0; i < position.count; i += 1) {
+    if (position.getY(i) > 0.07 && position.getX(i) > 0) back.push(position.getX(i));
+  }
+  assert.notDeepEqual(shifted, back, "chevrons did not scroll");
+  assert.equal(position.getX(0), before);
+
+  const columns = view.meshes.find((mesh) => mesh.name === "atrium-jump-columns");
+  assert.ok(columns, "jump pad columns are not drawn");
+  const columnMaterial = columns.material;
+  assert.equal(columnMaterial.transparent, true);
+  assert.equal(columnMaterial.depthWrite, false);
+  assert.equal(columnMaterial.blending, AdditiveBlending);
+  assert.ok(columnMaterial.opacity > 0.05 && columnMaterial.opacity <= 0.4, `column opacity ${columnMaterial.opacity}`);
+  const columnPos = columns.geometry.getAttribute("position");
+  let eastHigh = 0;
+  let westHigh = 0;
+  for (let i = 0; i < columnPos.count; i += 1) {
+    if (columnPos.getY(i) < 2.5) continue;
+    if (columnPos.getX(i) > 0) eastHigh += 1;
+    if (columnPos.getX(i) < 0) westHigh += 1;
+  }
+  assert.ok(eastHigh > 0 && westHigh > 0, `columns above the pads east ${eastHigh} west ${westHigh}`);
+  const lipNear = (mesh, x) => {
+    const pos = mesh.geometry.getAttribute("position");
+    for (let i = 0; i < pos.count; i += 1) {
+      if (Math.abs(pos.getX(i) - x) < 0.25 && Math.abs(pos.getZ(i)) <= 1.7 && pos.getY(i) > 5.2) return true;
+    }
+    return false;
+  };
+  const cyanMesh = view.meshes.find((mesh) => mesh.name === "atrium-cyan");
+  const magentaMesh = view.meshes.find((mesh) => mesh.name === "atrium-magenta");
+  assert.ok(cyanMesh && lipNear(cyanMesh, 11), "east slot lip is not on the cyan glow");
+  assert.ok(magentaMesh && lipNear(magentaMesh, -11), "west slot lip is not on the magenta glow");
+  console.log(
+    `atrium meshes ${view.meshes.length} triangles ${view.triangles} chevron span ${spanRatio.toFixed(2)} column opacity ${columnMaterial.opacity}`,
+  );
 });
 
 test("the procedural panel tiles, stays dark, and wraps at the seam", async () => {
