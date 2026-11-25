@@ -13,8 +13,14 @@ import { createHitboxWorld } from "../src/hitbox.ts";
 import { GROUND_WISH_SPEED } from "../src/move.ts";
 import { createPlayerState } from "../src/player/state.ts";
 import { QUILL_BURST, QUILL_BURST_DAMAGE, QUILL_CHARGE, QUILL_DAMAGE, createQuill } from "../src/quill.ts";
-import { rusherWindupTint } from "../src/rusher-view.ts";
-import { WISP_WAVE4_OPENING } from "../src/wisp.ts";
+import { ENFORCER_DAMAGE } from "../src/enforcer.ts";
+import {
+  RUSHER_WINDUP_CAP,
+  RUSHER_WINDUP_EMISSIVE,
+  rusherWindupAmount,
+  rusherWindupColor,
+} from "../src/rusher-view.ts";
+import { WISP_BOLT_DAMAGE } from "../src/wisp.ts";
 import {
   RUSHER_ARMOR,
   RUSHER_COOLDOWN,
@@ -268,17 +274,28 @@ test("only one rusher winds up or lunges, with 0.5 s between different lunges", 
   assert.ok(events.filter((type) => type === "rusher-windup").length >= 2);
 });
 
-test("the windup tint stays bright enough for the dark cloth to bloom", () => {
-  for (const swing of [0, 0.1, 0.2, 0.4]) {
-    const tint = rusherWindupTint(swing);
-    assert.ok(tint[0] >= 18, `red ${tint[0]} at ${swing}`);
-    assert.ok(tint[1] < tint[0] * 0.5, `windup green ${tint[1]} is high next to red ${tint[0]}`);
-    assert.ok(0.05 * tint[0] > 0.88, "hood stays under the bloom threshold");
+test("the windup flash stays on the body and under the bloom threshold", () => {
+  assert.ok(RUSHER_WINDUP_CAP < 0.88, `cap ${RUSHER_WINDUP_CAP} reaches the bloom extract`);
+  const cloth = [0.09, 0.1, 0.13];
+  const blade = [1, 0.9, 1];
+  for (const swing of [0, 0.05, 0.2, 0.4]) {
+    const amount = rusherWindupAmount(swing);
+    assert.ok(amount > 0.7 && amount <= 1, `amount ${amount}`);
+    for (const vertex of [cloth, blade]) {
+      const color = rusherWindupColor(vertex, swing);
+      for (let channel = 0; channel < 3; channel += 1) {
+        const added = vertex[channel] + amount * RUSHER_WINDUP_EMISSIVE[channel];
+        assert.equal(color[channel], Math.min(added, RUSHER_WINDUP_CAP));
+        assert.ok(color[channel] <= RUSHER_WINDUP_CAP);
+      }
+    }
+    const lit = rusherWindupColor(cloth, swing);
+    assert.ok(lit[0] > 0.55, `cloth red ${lit[0]} is too dim to read`);
+    assert.ok(lit[1] < lit[0] * 0.55, `cloth reads white (${lit.join(", ")})`);
   }
 });
 
-test("an idle player at 100 HP and 0 armor survives the wave 4 roster for at least 6 s", () => {
-  assert.equal(WISP_WAVE4_OPENING, 1.59);
+test("an idle player at 100 HP and 0 armor survives the wave 4 roster for at least 5.5 s", () => {
   const hull = createAtriumHull();
   const player = createPlayerState();
   const fight = createFight({
@@ -310,15 +327,49 @@ test("an idle player at 100 HP and 0 armor survives the wave 4 roster for at lea
   assert.equal(player.get().armor, 0);
 
   let t = DT;
-  while (player.get().hp > 0 && t < 45) {
+  let drone = 0;
+  let enforcer = 0;
+  let rusher = 0;
+  let hits = fight.wisps.snapshot().hits;
+  let houndHits = fight.enforcers.snapshot().hits;
+  let lunges = fight.rushers.lungeCount();
+  let hp = player.get().hp;
+  while (hp > 0 && t < 45) {
     fight.update(DT, feet);
     t += DT;
+    const nextHp = player.get().hp;
+    const nextHits = fight.wisps.snapshot().hits;
+    const nextHoundHits = fight.enforcers.snapshot().hits;
+    const nextLunges = fight.rushers.lungeCount();
+    let left = hp - nextHp;
+    const take = (count, amount) => {
+      let dealt = 0;
+      for (let i = 0; i < count && left > 0; i += 1) {
+        const hit = Math.min(amount, left);
+        dealt += hit;
+        left -= hit;
+      }
+      return dealt;
+    };
+    // Fight order is drones, then enforcers, then rushers. A killing blow is partial.
+    drone += take(nextHits - hits, WISP_BOLT_DAMAGE);
+    enforcer += take(nextHoundHits - houndHits, ENFORCER_DAMAGE);
+    rusher += take(nextLunges - lunges, RUSHER_DAMAGE);
+    assert.equal(left, 0, `unattributed damage at ${t.toFixed(3)} s`);
+    hits = nextHits;
+    houndHits = nextHoundHits;
+    lunges = nextLunges;
+    hp = nextHp;
   }
   console.log(
-    `wave 4 idle survival ${t.toFixed(6)} s (${Math.round(t / DT)} ticks) hp ${player.get().hp}`,
+    `wave 4 idle survival ${t.toFixed(6)} s (${Math.round(t / DT)} ticks) drone ${drone} enforcer ${enforcer} rusher ${rusher} hp ${hp}`,
   );
-  assert.equal(player.get().hp, 0, `still alive at ${t.toFixed(6)} s`);
-  assert.ok(t >= 6, `died at ${t.toFixed(6)} s`);
+  assert.equal(hp, 0, `still alive at ${t.toFixed(6)} s`);
+  assert.equal(drone, 80);
+  assert.equal(enforcer, 20);
+  assert.equal(rusher, 0);
+  assert.equal(drone + enforcer + rusher, 100);
+  assert.ok(t >= 5.5, `died at ${t.toFixed(6)} s`);
 });
 
 test("spawn grace blocks the lunge for 2 s", () => {

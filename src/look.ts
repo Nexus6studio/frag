@@ -102,6 +102,8 @@ export interface LookRig {
   setViewPunch(pitchDeg: number): void;
   /** Spawn facing: yaw 0, pitch 0, looking toward -Z. Sensitivity is kept. */
   reset(): void;
+  /** Face a yaw in degrees. Pitch returns to level. Used by the capture hook. */
+  setYaw(degrees: number): void;
   readonly yaw: number;
   readonly pitch: number;
   readonly sensitivity: number;
@@ -165,6 +167,12 @@ export function createLook(camera: PerspectiveCamera, options?: LookOptions): Lo
     },
     reset(): void {
       yaw = 0;
+      pitch = 0;
+      write();
+    },
+    setYaw(degrees: number): void {
+      if (!Number.isFinite(degrees)) return;
+      yaw = wrapYaw(degrees);
       pitch = 0;
       write();
     },

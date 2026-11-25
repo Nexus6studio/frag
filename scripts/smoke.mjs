@@ -1373,15 +1373,16 @@ async function captureRusherPose(page, errors, spec) {
           frames: typeof sim?.frames === "number" ? sim.frames : 0,
         };
       });
-    const faced = await page.evaluate((pose) => {
+    const faced = await page.evaluate((spec) => {
       const run = window.__fragRun;
-      if (!run || typeof run.faceSpawn !== "function" || typeof run[pose] !== "function") {
+      if (!run || typeof run.faceSpawn !== "function" || typeof run[spec.pose] !== "function") {
         return { error: "rusher capture hooks missing" };
       }
       run.faceSpawn();
       if (typeof run.clearShowcase === "function") run.clearShowcase();
+      if (spec.pose === "poseWindup" && typeof run.parkWindup === "function") run.parkWindup(spec.ahead);
       return { ok: true };
-    }, spec.pose);
+    }, { pose: spec.pose, ahead: spec.ahead ?? 1.45 });
     if (faced.error) {
       errors.push(faced.error);
       return;
@@ -1397,12 +1398,13 @@ async function captureRusherPose(page, errors, spec) {
       errors.push(`${label} capture before pose: ${before.error}`);
       return;
     }
-    const posed = await page.evaluate((pose) => {
+    const posed = await page.evaluate((spec) => {
       const run = window.__fragRun;
-      if (!run || typeof run[pose] !== "function") return { error: "rusher capture hooks missing" };
-      run[pose]();
+      if (!run || typeof run[spec.pose] !== "function") return { error: "rusher capture hooks missing" };
+      if (spec.pose === "poseWindup") run.poseWindup(spec.ahead);
+      else run[spec.pose]();
       return { ok: true };
-    }, spec.pose);
+    }, { pose: spec.pose, ahead: spec.ahead ?? 1.45 });
     if (posed.error) {
       errors.push(posed.error);
       return;
@@ -1450,8 +1452,15 @@ async function captureRusherLunge(page, errors) {
 async function captureRusherWindup(page, errors) {
   await captureRusherPose(page, errors, {
     pose: "poseWindup",
-    file: "rusher-windup.png",
-    label: "rusher windup",
+    ahead: 1.45,
+    file: "rusher-windup-close.png",
+    label: "rusher windup close",
+  });
+  await captureRusherPose(page, errors, {
+    pose: "poseWindup",
+    ahead: 7,
+    file: "rusher-windup-mid.png",
+    label: "rusher windup mid",
   });
 }
 
