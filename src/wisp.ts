@@ -9,9 +9,10 @@
 //
 // The gun is a two-bolt plasma burst. Bolts are 0.15 s apart. The next burst's
 // first bolt is 1.8 s after the second bolt. The last 0.3 s of that gap is the
-// glow telegraph, so every burst is announced at least 0.25 s ahead. Bolts die
-// on the atrium hull. Flechettes are the only thing that damages a drone, and
-// they arrive through the shared hitbox list, not a hitscan ray.
+// glow telegraph, so every burst is announced at least 0.25 s ahead. On wave 4
+// the drones after the lead wait an extra 1.59 s before that first burst.
+// Bolts die on the atrium hull. Flechettes are the only thing that damages a
+// drone, and they arrive through the shared hitbox list, not a hitscan ray.
 //
 // Death is sparks, small metal and plastic scraps, and dark hydraulic fluid.
 // Those particles, and the bolts, are fixed pools.
@@ -81,6 +82,13 @@ export type WispPhase = "grace" | "telegraph" | "intra" | "recover";
 
 /** Quiet start on wave 2 and later. Wave 1 uses WISP_WAVE1_SPAWN_GRACE. */
 export const WISP_SPAWN_GRACE = 2;
+/**
+ * Wave 4 only. Extra recover before a non-lead drone's first burst.
+ * The lead still opens on the normal grace, and every later burst stays on
+ * the 1.8 s gap. 1.59 s is the smallest hundredth that leaves an idle
+ * player at 100 HP alive through 6 s. Without it that player dies at 5.508 s.
+ */
+export const WISP_WAVE4_OPENING = 1.59;
 /** Wave 1 onboarding. Later waves keep WISP_SPAWN_GRACE. */
 export const WISP_WAVE1_SPAWN_GRACE = 3;
 
@@ -417,7 +425,9 @@ export function createWispSim(options: WispOptions): WispSim {
       if (drone.index === 0) beginTelegraph(drone, at);
       else {
         drone.phase = "recover";
-        drone.timer = 0;
+        // Wave 4's extra drones otherwise open on the same recover and the
+        // volley lands before the rusher's windup can matter.
+        drone.timer = director.wave >= 4 ? -WISP_WAVE4_OPENING : 0;
       }
       return;
     }
@@ -879,9 +889,18 @@ const RUN_DEBUG_KEY = "__fragRun";
 
 export function exposeRunDebug(
   target: object,
-  sim: { killAlive(): void; snapshot(): object; poseLunge?: () => void; faceSpawn?: () => void },
+  sim: {
+    killAlive(): void;
+    snapshot(): object;
+    poseLunge?: () => void;
+    poseWindup?: () => void;
+    clearShowcase?: () => void;
+    faceSpawn?: () => void;
+  },
 ): void {
   const pose = sim.poseLunge;
+  const windup = sim.poseWindup;
+  const clear = sim.clearShowcase;
   const face = sim.faceSpawn;
   Object.defineProperty(target, RUN_DEBUG_KEY, {
     configurable: true,
@@ -895,6 +914,12 @@ export function exposeRunDebug(
       },
       poseLunge(): void {
         pose?.();
+      },
+      poseWindup(): void {
+        windup?.();
+      },
+      clearShowcase(): void {
+        clear?.();
       },
       faceSpawn(): void {
         face?.();

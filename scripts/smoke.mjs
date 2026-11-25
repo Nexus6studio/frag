@@ -1336,7 +1336,8 @@ async function waitRenderedFrames(page, count) {
   });
 }
 
-async function captureRusherLunge(page, errors) {
+async function captureRusherPose(page, errors, spec) {
+  const label = spec.label;
   try {
     if ((await page.evaluate(() => document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "")) === "paused") {
       await page.locator("#pause-resume").click();
@@ -1372,14 +1373,15 @@ async function captureRusherLunge(page, errors) {
           frames: typeof sim?.frames === "number" ? sim.frames : 0,
         };
       });
-    const faced = await page.evaluate(() => {
+    const faced = await page.evaluate((pose) => {
       const run = window.__fragRun;
-      if (!run || typeof run.faceSpawn !== "function" || typeof run.poseLunge !== "function") {
+      if (!run || typeof run.faceSpawn !== "function" || typeof run[pose] !== "function") {
         return { error: "rusher capture hooks missing" };
       }
       run.faceSpawn();
+      if (typeof run.clearShowcase === "function") run.clearShowcase();
       return { ok: true };
-    });
+    }, spec.pose);
     if (faced.error) {
       errors.push(faced.error);
       return;
@@ -1387,18 +1389,20 @@ async function captureRusherLunge(page, errors) {
     const facedFrame = await waitRenderedFrames(page, 1);
     if (facedFrame.verdict.state !== "pass") {
       const reason = facedFrame.verdict.state === "fail" ? facedFrame.verdict.reason : "frame sample missing";
-      errors.push(`rusher capture did not draw the spawn view (${reason})`);
+      errors.push(`${label} capture did not draw the spawn view (${reason})`);
       return;
     }
     const before = await sample();
     if (before.error) {
-      errors.push(`rusher capture before pose: ${before.error}`);
+      errors.push(`${label} capture before pose: ${before.error}`);
       return;
     }
-    const posed = await page.evaluate(() => {
-      window.__fragRun.poseLunge();
+    const posed = await page.evaluate((pose) => {
+      const run = window.__fragRun;
+      if (!run || typeof run[pose] !== "function") return { error: "rusher capture hooks missing" };
+      run[pose]();
       return { ok: true };
-    });
+    }, spec.pose);
     if (posed.error) {
       errors.push(posed.error);
       return;
@@ -1406,33 +1410,49 @@ async function captureRusherLunge(page, errors) {
     const posedFrame = await waitRenderedFrames(page, 1);
     if (posedFrame.verdict.state !== "pass") {
       const reason = posedFrame.verdict.state === "fail" ? posedFrame.verdict.reason : "frame sample missing";
-      errors.push(`rusher capture did not draw the lunge (${reason})`);
+      errors.push(`${label} capture did not draw the pose (${reason})`);
       return;
     }
     const after = await sample();
     if (after.error) {
-      errors.push(`rusher capture after pose: ${after.error}`);
+      errors.push(`${label} capture after pose: ${after.error}`);
       return;
     }
     const captures = [];
-    const tmp = "/tmp/rusher-lunge.png";
+    const tmp = `/tmp/${spec.file}`;
     if (writePng(after.png, tmp)) captures.push(tmp);
     const artifacts = "/opt/cursor/artifacts";
     if (fs.existsSync(artifacts)) {
-      const saved = path.join(artifacts, "rusher-lunge.png");
+      const saved = path.join(artifacts, spec.file);
       if (writePng(after.png, saved)) captures.push(saved);
     }
     console.log(
-      `rusher lunge capture hot ${before.hot}->${after.hot} at sim ${before.sim.toFixed(3)}->${after.sim.toFixed(3)} frames ${before.frames}->${after.frames}, files ${captures.join(", ") || "unsaved"}`,
+      `${label} capture hot ${before.hot}->${after.hot} at sim ${before.sim.toFixed(3)}->${after.sim.toFixed(3)} frames ${before.frames}->${after.frames}, files ${captures.join(", ") || "unsaved"}`,
     );
     if (!(after.hot > before.hot + 8)) {
-      errors.push(`rusher lunge was not visible (hot ${before.hot}->${after.hot})`);
+      errors.push(`${label} was not visible (hot ${before.hot}->${after.hot})`);
     }
-    if (captures.length === 0) errors.push("rusher lunge capture was not written");
+    if (captures.length === 0) errors.push(`${label} capture was not written`);
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`rusher capture failed: ${message}`);
+    errors.push(`${label} capture failed: ${message}`);
   }
+}
+
+async function captureRusherLunge(page, errors) {
+  await captureRusherPose(page, errors, {
+    pose: "poseLunge",
+    file: "rusher-lunge.png",
+    label: "rusher lunge",
+  });
+}
+
+async function captureRusherWindup(page, errors) {
+  await captureRusherPose(page, errors, {
+    pose: "poseWindup",
+    file: "rusher-windup.png",
+    label: "rusher windup",
+  });
 }
 
 const devPort = Number(process.env.FRAG_DEV_PORT ?? 5174);
@@ -1786,6 +1806,7 @@ async function runDevSmoke(browser, errors) {
       await measureWave4(page, errors);
     }
     await captureRusherLunge(page, errors);
+    await captureRusherWindup(page, errors);
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`dev smoke failed: ${message}`);

@@ -7,6 +7,7 @@
 // so the short squares are not up in the ear's sensitive 2–5 kHz band.
 // The Quill charge is a sawtooth hum that rises across the 0.45 s hold and
 // uses that same lowpass. Releasing the charge, or firing it, stops the hum.
+// The rusher windup is a short sawtooth from 180 Hz to 540 Hz on that lowpass.
 // The low-HP heartbeat is a lub-dub of lowpassed noise. It stops when HP leaves
 // the low band, including death, and the beats stay 0.75 s apart.
 
@@ -163,6 +164,12 @@ const RECIPES: Record<CueId, Recipe> = {
     dur: 0.06,
     tones: [{ type: "sine", from: 90, to: 45, dur: 0.05, gain: 0.18, at: 0 }],
     noise: [{ dur: 0.04, gain: 0.14, freq: 150, at: 0 }],
+  },
+  // Windup tell. Fundamental stays under 900 Hz and uses the shared tone lowpass.
+  rusher: {
+    dur: 0.14,
+    tones: [{ type: "sawtooth", from: 180, to: 540, dur: 0.12, gain: 0.09, at: 0 }],
+    noise: [],
   },
   health: chirp(cuePitch("health") ?? 349.23),
   armor: chirp(cuePitch("armor") ?? 440),

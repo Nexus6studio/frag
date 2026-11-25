@@ -307,6 +307,22 @@ if (import.meta.env.DEV) {
         yawRad + Math.PI,
       );
     },
+    poseWindup(): void {
+      const yawRad = (look.yaw * Math.PI) / 180;
+      const ahead = 1.45;
+      const feet = mover.state.position;
+      rushers.poseWindup(
+        {
+          x: feet.x + -Math.sin(yawRad) * ahead,
+          y: feet.y,
+          z: feet.z + -Math.cos(yawRad) * ahead,
+        },
+        yawRad + Math.PI,
+      );
+    },
+    clearShowcase(): void {
+      rushers.clearShowcase();
+    },
   };
   exposeRunDebug(window, runDebug);
 }

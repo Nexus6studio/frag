@@ -131,7 +131,7 @@ export function mountRusherView(scene: Scene, sim: RusherSim): { sync(): void } 
         if (!unit.alive && !falling) continue;
         const fall = falling ? unit.down / 0.5 : 0;
         placeBody(bodies, shown, unit, fall);
-        tintBody(bodies, shown, unit, sim.time);
+        tintBody(bodies, shown, unit);
         shown += 1;
       }
       show(bodies, shown);
@@ -198,10 +198,21 @@ function placeBody(mesh: InstancedMesh, index: number, unit: RusherUnit, fall: n
   mesh.setMatrixAt(index, _matrix);
 }
 
-function tintBody(mesh: InstancedMesh, index: number, unit: RusherUnit, time: number): void {
+/**
+ * Linear RGB multiplier for the windup. Cloth vertices are about 0.05–0.09,
+ * so the floor has to stay above ~18 or the body never clears the bloom
+ * threshold. It pulses on the same mesh: no extra draw.
+ */
+export function rusherWindupTint(swing: number): readonly [number, number, number] {
+  const flash = 0.5 + 0.5 * Math.sin(swing * 48);
+  const gain = 18 + flash * 10;
+  return [gain, gain * 0.28, gain * 0.82];
+}
+
+function tintBody(mesh: InstancedMesh, index: number, unit: RusherUnit): void {
   if (unit.phase === "telegraph") {
-    const pulse = 0.45 + Math.sin(time * 36) * 0.55;
-    _color.setRGB(1, 0.35 + pulse * 0.45, 0.55 + pulse * 0.4);
+    const tint = rusherWindupTint(unit.swing);
+    _color.setRGB(tint[0], tint[1], tint[2]);
   } else if (unit.phase === "lunge") {
     _color.setRGB(1, 0.82, 1);
   } else {
