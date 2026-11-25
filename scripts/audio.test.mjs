@@ -197,6 +197,12 @@ test("mute toggles the master gain and stays in memory", () => {
   assert.equal(master.gain.value, 0);
   assert.equal(audio.toggleMute(), false);
   assert.equal(master.gain.value > 0, true);
+  assert.equal(audio.setMuted(true), true);
+  assert.equal(audio.muted, true);
+  assert.equal(master.gain.value, 0);
+  assert.equal(audio.setMuted(true), true);
+  assert.equal(audio.setMuted(false), false);
+  assert.equal(master.gain.value > 0, true);
   audio.play("flechette");
   audio.cut();
 });

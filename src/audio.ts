@@ -211,6 +211,7 @@ export function createAudio(host?: AudioHost): {
   prime(): void;
   play(cue: CueId): void;
   toggleMute(): boolean;
+  setMuted(muted: boolean): boolean;
   readonly muted: boolean;
   setHp(hp: number): void;
   tick(): void;
@@ -416,17 +417,22 @@ export function createAudio(host?: AudioHost): {
     for (const spec of MURMUR) stops.push(pulse(spec, now));
   }
 
+  function setMuted(next: boolean): boolean {
+    muted = next;
+    try {
+      if (master) master.gain.value = muted ? 0 : MASTER;
+    } catch {
+      // The flag still updates. The gain node is already gone.
+    }
+    return muted;
+  }
+
   return {
     prime,
     play,
+    setMuted,
     toggleMute(): boolean {
-      muted = !muted;
-      try {
-        if (master) master.gain.value = muted ? 0 : MASTER;
-      } catch {
-        // The flag still flips. The gain node is already gone.
-      }
-      return muted;
+      return setMuted(!muted);
     },
     get muted() {
       return muted;

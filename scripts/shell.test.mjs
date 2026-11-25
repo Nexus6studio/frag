@@ -18,6 +18,8 @@ const IDS = [
   "content-warning",
   "click-to-play",
   "pause",
+  "pause-resume",
+  "pause-settings",
   "content-warning-continue",
   "build-hash",
   "fps-readout",
@@ -64,7 +66,9 @@ function createHarness() {
     dispatch(type, event) {
       for (const fn of canvasListeners.get(type) ?? []) fn(event);
     },
+    lockRequests: 0,
     requestPointerLock() {
+      canvas.lockRequests += 1;
       return Promise.resolve();
     },
   };
@@ -183,7 +187,7 @@ test("escape pauses with and without the pointer lock", async (t) => {
   assert.equal(h.elements.get("pause").hidden, false);
 });
 
-test("enter and a click both resume from pause", (t) => {
+test("enter and the resume button leave pause, settings clicks do not", (t) => {
   const h = createHarness();
   t.after(() => h.restore());
   const shell = play(h);
@@ -195,12 +199,15 @@ test("enter and a click both resume from pause", (t) => {
   assert.equal(h.elements.get("pause").hidden, true);
 
   h.key("Escape");
+  const locks = h.canvas.lockRequests;
+  h.elements.get("pause-settings").dispatch("click", clickEvent());
   h.elements.get("pause").dispatch("click", clickEvent());
-  assert.equal(shell.phase, "playing");
-  assert.equal(h.elements.get("pause").hidden, true);
-
-  h.key("Escape");
   h.canvas.dispatch("mousedown", clickEvent());
+  assert.equal(shell.phase, "paused", "a settings click resumed");
+  assert.equal(h.elements.get("pause").hidden, false);
+  assert.equal(h.canvas.lockRequests, locks, "a settings click asked for the pointer");
+
+  h.elements.get("pause-resume").dispatch("click", clickEvent());
   assert.equal(shell.phase, "playing");
   assert.equal(h.elements.get("pause").hidden, true);
 });
@@ -226,7 +233,7 @@ test("a rejected pointer lock does not soft-lock resume", async (t) => {
   assert.equal(globalThis.document.pointerLockElement, null);
 
   h.key("Escape");
-  h.elements.get("pause").dispatch("click", clickEvent());
+  h.elements.get("pause-resume").dispatch("click", clickEvent());
   await settle();
   assert.equal(shell.phase, "playing");
   assert.equal(h.elements.get("pause").hidden, true);

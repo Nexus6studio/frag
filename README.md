@@ -28,7 +28,7 @@ npm run preview
 
 `npm run build` typechecks with `tsc` and writes the static site to `dist/`. `npm run preview` serves that build.
 
-A fresh load shows a content warning before play. The title is Content warning. The body says the prototype contains fast-paced combat against fictional enemies, with blood, gibs, explosions, sparks and debris, plus flashing lights and rapid motion. Continue acknowledges it for that page load only. It is not stored, and the next load shows it again. The card also shows a seven-character build id in small type, such as `build 2a02f86`, so a playtest note can name the build. Vite inlines it from `GITHUB_SHA` when that is set, otherwise from `git rev-parse --short HEAD`, otherwise `dev`. On a GitHub Actions pull request, `GITHUB_SHA` is the merge commit of the head into the base branch, not the branch head, so the id on a PR preview can differ from the latest commit on the branch. Continue then reveals a click-to-play overlay titled Frag. Click it, or press Enter, to lock the pointer and hide the overlay. Esc releases the pointer and pauses. Click the pause overlay to resume. Resuming does not show the warning again. Backquote or F1 toggles a small FPS readout, which is off until then. The scene behind the overlays is the Neon Atrium: a closed 32 m map with a sunken well, a ground concourse, corner ramps and stairs, and an upper ring. Nothing there is a loaded asset. Looking, movement, the control table, and the field of view are below.
+A fresh load shows a content warning before play. The title is Content warning. The body says the prototype contains fast-paced combat against fictional enemies, with blood, gibs, explosions, sparks and debris, plus flashing lights and rapid motion. Continue acknowledges it for that page load only. It is not stored, and the next load shows it again. The card also shows a seven-character build id in small type, such as `build 2a02f86`, so a playtest note can name the build. Vite inlines it from `GITHUB_SHA` when that is set, otherwise from `git rev-parse --short HEAD`, otherwise `dev`. On a GitHub Actions pull request, `GITHUB_SHA` is the merge commit of the head into the base branch, not the branch head, so the id on a PR preview can differ from the latest commit on the branch. Continue then reveals a click-to-play overlay titled Frag. Click it, or press Enter, to lock the pointer and hide the overlay. Esc releases the pointer and pauses. Press Enter, or the Resume button, to continue. The pause card sets mouse sensitivity from 0.05° to 0.30° per pixel, horizontal field of view from 90° to 115°, mute, and invert Y. Those four are written to localStorage under `frag:settings:v1` only after they change. Resuming does not show the warning again. Backquote or F1 toggles a small FPS readout, which is off until then. The scene behind the overlays is the Neon Atrium: a closed 32 m map with a sunken well, a ground concourse, corner ramps and stairs, and an upper ring. Nothing there is a loaded asset. Looking, movement, the control table, and the field of view are below.
 
 ## Controls
 
@@ -41,14 +41,14 @@ Looking and buttons are read from one input state each frame. `down` is held. `p
 | Space | `jump` | Jump. |
 | Left mouse | `fire` | VEC-9 Quill Driver. Full-auto while held: one flechette per pulse, eight per second. A click that is already up by the next sample still fires once. Clicks cannot exceed that eight per second, and a burst inside one frame does not queue extra shots. `down.fire` stays set for the whole hold. `pressed.fire` is only the down edge. `firePresses` is how many left clicks landed since the last sample. |
 | R | `reload` | Reload the Quill Driver. An empty magazine reloads on its own when rounds remain. |
-| Esc | `pause` | Pause and release the pointer. Click the pause overlay to resume. |
+| Esc | `pause` | Pause and release the pointer. Enter or Resume continues. The settings controls do not. |
 | Backquote or F1 | `debug` | Toggle the FPS and position readout. The shell toggle still works while paused. |
-| M | `mute` | Toggle procedural audio. The HUD shows MUTE while silenced. Not saved. Works while paused, and it does not start play. |
+| M | `mute` | Toggle procedural audio. The HUD shows MUTE while silenced. The pause card's mute box is the same switch, and it is saved with the other pause settings. Works while paused, and it does not start play. |
 | `[` `]` | `sensDown` `sensUp` | Temporary mouse sensitivity. Not saved. |
 
 There is no gamepad or touch input.
 
-Default look sensitivity is 0.12° per pointer-lock pixel (`movementX` / `movementY`). The Pointer Lock specification reports those deltas in CSS pixels. Frag does not scale them by `devicePixelRatio`, so one CSS pixel of mouse travel is 0.12° at every display scale. Pointer acceleration applied by the operating system is left as the browser reports it. `[` and `]` step that sensitivity by 0.02° while playing. The debug readout shows FPS, camera position, yaw, pitch, sensitivity, planar speed, and whether the body is grounded. Nothing is written to `localStorage`.
+Default look sensitivity is 0.12° per pointer-lock pixel (`movementX` / `movementY`). The pause card can set 0.05°–0.30°. The Pointer Lock specification reports those deltas in CSS pixels. Frag does not scale them by `devicePixelRatio`, so one CSS pixel of mouse travel is the same angle at every display scale. Pointer acceleration applied by the operating system is left as the browser reports it. `[` and `]` step the live sensitivity by 0.02° while playing and are not saved. The debug readout shows FPS, camera position, yaw, pitch, sensitivity, planar speed, and whether the body is grounded. Sensitivity, field of view, mute, and invert Y are saved under `frag:settings:v1` when they change.
 
 ## Movement
 
@@ -96,7 +96,7 @@ HP at 0 hides the combat HUD and shows waves cleared, frags, time alive as mm:ss
 
 ## Field of view
 
-The horizontal field of view is 105°. three.js `PerspectiveCamera.fov` is the vertical field of view, so Frag derives the vertical angle from 105° and the viewport aspect ratio (`width / height`) and writes that into `camera.fov` on load and on resize:
+The default horizontal field of view is 105°. The pause card can set 90°–115°. three.js `PerspectiveCamera.fov` is the vertical field of view, so Frag derives the vertical angle from that horizontal angle and the viewport aspect ratio (`width / height`) and writes that into `camera.fov` on load, on resize, and when the setting changes:
 
 ```
 vertical = 2 * atan(tan(horizontal / 2) / aspect)

@@ -1098,7 +1098,7 @@ async function assertShellFlow(page, errors) {
   if (pausedHud.mode !== "dim") errors.push(`hud not dimmed on pause (${pausedHud.mode ?? "missing"})`);
   else if (!(pausedHud.opacity < 1)) errors.push(`pause hud opacity is ${pausedHud.opacity}`);
 
-  await page.locator("#pause").click();
+  await page.locator("#pause-resume").click();
   await expectPhase(page, errors, "playing", "after resume");
   if (await page.locator("#content-warning").evaluate((el) => !el.hidden)) {
     errors.push("warning returned when resuming");
@@ -1226,7 +1226,7 @@ async function runDevSmoke(browser, errors) {
     if (raced.count !== 1) errors.push(`death recap elements ${raced.count}`);
     if (raced.text !== raced.before) errors.push("death during pause rewrote the recap");
     if (!raced.warningHidden) errors.push("warning returned when dying during pause");
-    if (raced.phase === "paused") await page.locator("#pause").click();
+    if (raced.phase === "paused") await page.locator("#pause-resume").click();
     const resumedDead = await page.evaluate(() => {
       const death = document.querySelector("#death-recap");
       return {
@@ -1254,7 +1254,7 @@ async function runDevSmoke(browser, errors) {
     if (!afterRace.warningHidden || afterRace.phase === "warning") {
       errors.push(`warning returned after restart from a paused death (${afterRace.phase})`);
     }
-    if (afterRace.phase === "paused") await page.locator("#pause").click();
+    if (afterRace.phase === "paused") await page.locator("#pause-resume").click();
     try {
       await page.waitForFunction(() => document.pointerLockElement != null, undefined, {
         timeout: 4_000,
@@ -1422,7 +1422,7 @@ async function runDevSmoke(browser, errors) {
       errors.push(`restart kept velocity ${restarted.vx}, ${restarted.vz}`);
     }
 
-    if (restarted.phase === "paused") await page.locator("#pause").click();
+    if (restarted.phase === "paused") await page.locator("#pause-resume").click();
     try {
       await page.waitForFunction(() => document.pointerLockElement != null, undefined, {
         timeout: 4_000,
@@ -1643,6 +1643,16 @@ async function readPauseProbe(page) {
     const panel = document.querySelector("#pause .panel");
     const px = (el) => (el instanceof HTMLElement ? Number.parseFloat(getComputedStyle(el).fontSize) : null);
     const style = (el) => (el instanceof HTMLElement ? getComputedStyle(el) : null);
+    const labels = [...document.querySelectorAll("#pause-settings .setting-label, #pause-settings .setting-value")].map(
+      (el) => {
+        const computed = getComputedStyle(el);
+        return {
+          text: (el.textContent ?? "").trim(),
+          px: Number.parseFloat(computed.fontSize),
+          color: computed.color,
+        };
+      },
+    );
     return {
       hp: document.querySelector("#hud-hp")?.textContent ?? "",
       time: drones?.time ?? null,
@@ -1656,6 +1666,7 @@ async function readPauseProbe(page) {
       titleColor: style(title)?.color ?? "",
       copyColor: style(copy)?.color ?? "",
       panel: style(panel)?.backgroundColor ?? "",
+      labels,
       locked: document.pointerLockElement != null,
     };
   });
@@ -1666,8 +1677,19 @@ function assertPauseReadable(probe, errors, label) {
     errors.push(`${label}: pause overlay is hidden (${probe.hidden}, ${probe.display})`);
   }
   const text = probe.text.replace(/\s+/g, " ");
-  if (!text.includes("Paused") || !text.includes("Click or press Enter to resume")) {
+  if (!text.includes("Paused") || !text.includes("Press Enter or Resume")) {
     errors.push(`${label}: pause copy is ${JSON.stringify(probe.text)}`);
+  }
+  if (!Array.isArray(probe.labels) || probe.labels.length < 6) {
+    errors.push(`${label}: pause settings labels missing`);
+  } else {
+    for (const row of probe.labels) {
+      if (!(row.px >= 12)) errors.push(`${label}: ${row.text} is ${row.px}px`);
+      const ratio = contrastRatio(row.color, probe.panel);
+      if (!(ratio >= 4.5)) {
+        errors.push(`${label}: ${row.text} contrast ${ratio} (${row.color} on ${probe.panel})`);
+      }
+    }
   }
   if (!(probe.titlePx >= 16)) errors.push(`${label}: pause title is ${probe.titlePx}px`);
   if (!(probe.copyPx >= 16)) errors.push(`${label}: pause body is ${probe.copyPx}px`);
@@ -1749,7 +1771,25 @@ async function assertPauseResume(browser, errors) {
     assertPauseReadable(await readPauseProbe(page), errors, "escape");
     await assertSimHeld(page, errors, "escape");
 
-    await page.locator("#pause").click();
+    const slider = await page.locator("#setting-sensitivity").boundingBox();
+    if (!slider) errors.push("sensitivity slider has no box");
+    else {
+      await page.mouse.move(slider.x + 6, slider.y + slider.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(slider.x + slider.width - 6, slider.y + slider.height / 2, { steps: 5 });
+      await page.mouse.up();
+    }
+    await page.locator("#setting-invert-y").click();
+    const afterControls = await page.evaluate(() => ({
+      phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+      hidden: document.querySelector("#pause") instanceof HTMLElement ? document.querySelector("#pause").hidden : null,
+      locked: document.pointerLockElement != null,
+    }));
+    if (afterControls.phase !== "paused" || afterControls.hidden !== false || afterControls.locked) {
+      errors.push(`settings controls left pause (${JSON.stringify(afterControls)})`);
+    }
+
+    await page.locator("#pause-resume").click();
     await page.waitForFunction(
       () => {
         const pause = document.querySelector("#pause");
@@ -1801,6 +1841,7 @@ async function assertPauseResume(browser, errors) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`pause resume failed: ${message}`);
   } finally {
+    await page.evaluate(() => localStorage.removeItem("frag:settings:v1")).catch(() => {});
     await page.close();
   }
 }
@@ -1844,7 +1885,7 @@ async function assertStationaryDamage(browser, errors) {
     ) {
       errors.push(`enemies kept simulating while paused (${JSON.stringify(frozen)} -> ${JSON.stringify(held)})`);
     }
-    await page.locator("#pause").click();
+    await page.locator("#pause-resume").click();
     await page.waitForFunction(
       () =>
         document.querySelector("#hud")?.getAttribute("data-mode") === "play" && document.pointerLockElement != null,
@@ -1992,7 +2033,7 @@ async function assertThrottledFire(browser, errors) {
       undefined,
       { timeout: 3_000 },
     );
-    await page.locator("#pause").click();
+    await page.locator("#pause-resume").click();
     await page.waitForFunction(() => document.pointerLockElement != null, undefined, {
       timeout: 4_000,
       polling: 50,
