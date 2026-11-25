@@ -879,8 +879,10 @@ const RUN_DEBUG_KEY = "__fragRun";
 
 export function exposeRunDebug(
   target: object,
-  sim: { killAlive(): void; snapshot(): object },
+  sim: { killAlive(): void; snapshot(): object; poseLunge?: () => void; faceSpawn?: () => void },
 ): void {
+  const pose = sim.poseLunge;
+  const face = sim.faceSpawn;
   Object.defineProperty(target, RUN_DEBUG_KEY, {
     configurable: true,
     enumerable: true,
@@ -890,6 +892,12 @@ export function exposeRunDebug(
       },
       get snapshot(): object {
         return sim.snapshot();
+      },
+      poseLunge(): void {
+        pose?.();
+      },
+      faceSpawn(): void {
+        face?.();
       },
     },
   });

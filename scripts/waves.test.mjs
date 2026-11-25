@@ -15,6 +15,7 @@ import {
   DRONE_CAP,
   ENFORCER_CAP,
   ENFORCER_ENABLED,
+  RUSHER_CAP,
   WAVE_GAP_SECONDS,
   createWaveDirector,
   formatClock,
@@ -62,30 +63,30 @@ function clearIntoNext(sim, feet) {
   assert.ok(sim.aliveCount() > 0);
 }
 
-test("wave composition caps drones at 4 and enforcers at 2", () => {
+test("wave composition caps drones at 4, enforcers at 2, and rushers at 2", () => {
   assert.equal(ENFORCER_ENABLED, true);
-  assert.deepEqual(waveComposition(1), { drones: 2, enforcers: 0 });
-  assert.deepEqual(waveComposition(2), { drones: 3, enforcers: 1 });
-  assert.deepEqual(waveComposition(3), { drones: 4, enforcers: 2 });
-  assert.deepEqual(waveComposition(4), { drones: 4, enforcers: 2 });
-  assert.deepEqual(waveComposition(12), { drones: DRONE_CAP, enforcers: ENFORCER_CAP });
+  assert.deepEqual(waveComposition(1), { drones: 2, enforcers: 0, rushers: 0 });
+  assert.deepEqual(waveComposition(2), { drones: 3, enforcers: 1, rushers: 1 });
+  assert.deepEqual(waveComposition(3), { drones: 4, enforcers: 2, rushers: 1 });
+  assert.deepEqual(waveComposition(4), { drones: 4, enforcers: 2, rushers: 2 });
+  assert.deepEqual(waveComposition(12), { drones: DRONE_CAP, enforcers: ENFORCER_CAP, rushers: RUSHER_CAP });
   assert.deepEqual(
     [1, 2, 3, 4, 5].map((wave) => waveSpawnCounts(wave, false)),
     [
-      { drones: 2, enforcers: 0 },
-      { drones: 3, enforcers: 0 },
-      { drones: 4, enforcers: 0 },
-      { drones: 4, enforcers: 0 },
-      { drones: 4, enforcers: 0 },
+      { drones: 2, enforcers: 0, rushers: 0 },
+      { drones: 3, enforcers: 0, rushers: 1 },
+      { drones: 4, enforcers: 0, rushers: 1 },
+      { drones: 4, enforcers: 0, rushers: 2 },
+      { drones: 4, enforcers: 0, rushers: 2 },
     ],
   );
   assert.deepEqual(
     [1, 2, 3, 4].map((wave) => waveSpawnCounts(wave, true)),
     [
-      { drones: 2, enforcers: 0 },
-      { drones: 3, enforcers: 1 },
-      { drones: 4, enforcers: 2 },
-      { drones: 4, enforcers: 2 },
+      { drones: 2, enforcers: 0, rushers: 0 },
+      { drones: 3, enforcers: 1, rushers: 1 },
+      { drones: 4, enforcers: 2, rushers: 1 },
+      { drones: 4, enforcers: 2, rushers: 2 },
     ],
   );
   assert.equal(formatClock(0), "00:00");
@@ -161,7 +162,7 @@ test("flag off clears 2, 3, 4, 4, 4 drones with a two second gap and no win", ()
   assert.ok(sim.wave >= 5);
 });
 
-test("live waves are 2+0, 3+1, 4+2, 4+2 and cap at 6", () => {
+test("live waves are 2+0+0, 3+1+1, 4+2+1, 4+2+2 and cap at 8", () => {
   const hull = createAtriumHull();
   const player = createPlayerState({ hp: 500 });
   const fight = createFight({
@@ -176,11 +177,13 @@ test("live waves are 2+0, 3+1, 4+2, 4+2 and cap at 6", () => {
   for (let i = 0; i < 4; i += 1) {
     const drones = fight.wisps.aliveCount();
     const enforcers = fight.enforcers.aliveCount();
-    maxAlive = Math.max(maxAlive, drones + enforcers);
-    seen.push({ drones, enforcers });
+    const rushers = fight.rushers.aliveCount();
+    maxAlive = Math.max(maxAlive, drones + enforcers + rushers);
+    seen.push({ drones, enforcers, rushers });
     assert.ok(drones <= DRONE_CAP);
     assert.ok(enforcers <= ENFORCER_CAP);
-    assert.ok(drones + enforcers <= DRONE_CAP + ENFORCER_CAP);
+    assert.ok(rushers <= RUSHER_CAP);
+    assert.ok(drones + enforcers + rushers <= DRONE_CAP + ENFORCER_CAP + RUSHER_CAP);
     assertSpawns(fight.wisps, hull, feet);
     for (const unit of fight.enforcers.units) {
       if (!unit.alive) continue;
@@ -196,6 +199,7 @@ test("live waves are 2+0, 3+1, 4+2, 4+2 and cap at 6", () => {
       fight.killAll();
       assert.equal(fight.wisps.aliveCount(), 0);
       assert.equal(fight.enforcers.aliveCount(), 0);
+      assert.equal(fight.rushers.aliveCount(), 0);
       assert.equal(fight.wisps.phase, "gap");
       step(fight, WAVE_GAP_SECONDS - 0.1, feet);
       assert.equal(fight.wisps.aliveCount(), 0, "the next wave spawned early");
@@ -206,15 +210,15 @@ test("live waves are 2+0, 3+1, 4+2, 4+2 and cap at 6", () => {
     }
   }
   console.log(
-    `waves ${seen.map((row) => `${row.drones}+${row.enforcers}`).join(", ")}, max alive ${maxAlive}`,
+    `waves ${seen.map((row) => `${row.drones}+${row.enforcers}+${row.rushers}`).join(", ")}, max alive ${maxAlive}`,
   );
   assert.deepEqual(seen, [
-    { drones: 2, enforcers: 0 },
-    { drones: 3, enforcers: 1 },
-    { drones: 4, enforcers: 2 },
-    { drones: 4, enforcers: 2 },
+    { drones: 2, enforcers: 0, rushers: 0 },
+    { drones: 3, enforcers: 1, rushers: 1 },
+    { drones: 4, enforcers: 2, rushers: 1 },
+    { drones: 4, enforcers: 2, rushers: 2 },
   ]);
-  assert.ok(maxAlive <= DRONE_CAP + ENFORCER_CAP);
+  assert.ok(maxAlive <= DRONE_CAP + ENFORCER_CAP + RUSHER_CAP);
   assert.equal(fight.wisps.cleared, undefined);
   assert.equal(fight.wisps.won, undefined);
 });
@@ -232,6 +236,7 @@ test("a player standing idle in wave 1 still has HP at 12 s and is not dead befo
   assert.equal(fight.wisps.wave, 1);
   assert.equal(fight.wisps.aliveCount(), 2);
   assert.equal(fight.enforcers.aliveCount(), 0);
+  assert.equal(fight.rushers.aliveCount(), 0);
   let t = 0;
   let hpAt12 = null;
   while (t < 15 - 1e-9) {
@@ -244,6 +249,7 @@ test("a player standing idle in wave 1 still has HP at 12 s and is not dead befo
   assert.ok(hpAt12 > 0, `hp at 12 s is ${hpAt12}`);
   assert.equal(fight.wisps.wave, 1);
   assert.equal(fight.enforcers.aliveCount(), 0);
+  assert.equal(fight.rushers.aliveCount(), 0);
   console.log(`wave 1 idle hp at 12 s ${hpAt12}, at 15 s ${player.get().hp}`);
 });
 

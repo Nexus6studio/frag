@@ -41,7 +41,9 @@ import {
 } from "../src/enforcer.ts";
 import { GORE_DECAL_CAP, GORE_GIB_CAP, GORE_SPRAY_CAP } from "../src/gore.ts";
 import { mountEnforcerView } from "../src/enforcer-view.ts";
-import { DRONE_CAP, ENFORCER_CAP } from "../src/waves.ts";
+import { RUSHER_TRAIL_CAP, rusherInsideVolume } from "../src/rusher.ts";
+import { mountRusherView } from "../src/rusher-view.ts";
+import { DRONE_CAP, ENFORCER_CAP, RUSHER_CAP } from "../src/waves.ts";
 
 const SOAK_SECONDS = 20 * 60;
 const STEPS = Math.round(SOAK_SECONDS / SIM_DT);
@@ -57,6 +59,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   const fight = createFight({ hull, player, hitboxes, origin: ATRIUM_SPAWN });
   const wisps = fight.wisps;
   const enforcers = fight.enforcers;
+  const rushers = fight.rushers;
   let mover = createAtriumMover(createMoveState(ATRIUM_SPAWN));
 
   const scene = new Scene();
@@ -69,6 +72,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   const quillView = mountQuillView(scene, camera, quill, null);
   const wispView = mountWispView(scene, wisps);
   const enforcerView = mountEnforcerView(scene, enforcers);
+  const rusherView = mountRusherView(scene, rushers);
 
   const aim = { x: 0, y: 0, z: -1 };
   const muzzle = { x: 0, y: 0, z: 0 };
@@ -80,6 +84,11 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     z: drone.position.z,
   }));
   const previousHounds = enforcers.units.map((unit) => ({
+    x: unit.position.x,
+    y: unit.position.y,
+    z: unit.position.z,
+  }));
+  const previousRushers = rushers.units.map((unit) => ({
     x: unit.position.x,
     y: unit.position.y,
     z: unit.position.z,
@@ -114,6 +123,11 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       previousHounds[i].y = enforcers.units[i].position.y;
       previousHounds[i].z = enforcers.units[i].position.z;
     }
+    for (let i = 0; i < rushers.units.length; i += 1) {
+      previousRushers[i].x = rushers.units[i].position.x;
+      previousRushers[i].y = rushers.units[i].position.y;
+      previousRushers[i].z = rushers.units[i].position.z;
+    }
     restarts += 1;
     assert.equal(player.get().hp, 100, `${reason} restart hp`);
     assert.equal(wisps.wave, 1, `${reason} restart wave`);
@@ -121,6 +135,9 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     assert.ok(enforcers.spray.every((slot) => slot.alive === false), `${reason} blood spray survived restart`);
     assert.ok(enforcers.gibs.every((slot) => slot.alive === false), `${reason} blood gibs survived restart`);
     assert.ok(enforcers.decals.every((slot) => slot.alive === false), `${reason} blood decals survived restart`);
+    assert.ok(rushers.spray.every((slot) => slot.alive === false), `${reason} rusher blood spray survived restart`);
+    assert.ok(rushers.gibs.every((slot) => slot.alive === false), `${reason} rusher gibs survived restart`);
+    assert.ok(rushers.decals.every((slot) => slot.alive === false), `${reason} rusher decals survived restart`);
     assert.ok(wisps.sparks.every((slot) => slot.alive === false), `${reason} drone sparks survived restart`);
     assert.ok(wisps.gibs.every((slot) => slot.alive === false), `${reason} drone gibs survived restart`);
     assert.ok(wisps.fluid.every((slot) => slot.alive === false), `${reason} drone fluid survived restart`);
@@ -157,7 +174,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     // the drone orbits behind a hull and the hold never breaks. Keep walking
     // unless an enforcer is in that range. The enforcer still gets the plant,
     // because it is what blocks the wave.
-    const houndNear = threatNear(mover.state.position, [], enforcers.units, 16);
+    const houndNear = threatNear(mover.state.position, [], enforcers.units, rushers.units, 16);
     const engaged = !pad && houndNear;
     const yaw = pad ? yawToward(mover.state.position, pad) : look.yaw;
     mover.advance(SIM_DT, {
@@ -181,7 +198,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     eye.x = body.position.x;
     eye.y = body.position.y + EYE_HEIGHT;
     eye.z = body.position.z;
-    aimAt(eye, wisps.drones, previous, enforcers.units, previousHounds, aim, look);
+    aimAt(eye, wisps.drones, previous, enforcers.units, previousHounds, rushers.units, previousRushers, aim, look);
     muzzleOrigin(eye, aim, muzzle);
     if (player.get().hp > 0) {
       quill.update(SIM_DT, command);
@@ -191,6 +208,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     quillView.sync();
     wispView.sync();
     enforcerView.sync();
+    rusherView.sync();
     for (let i = 0; i < wisps.drones.length; i += 1) {
       previous[i].x = wisps.drones[i].position.x;
       previous[i].y = wisps.drones[i].position.y;
@@ -200,6 +218,11 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       previousHounds[i].x = enforcers.units[i].position.x;
       previousHounds[i].y = enforcers.units[i].position.y;
       previousHounds[i].z = enforcers.units[i].position.z;
+    }
+    for (let i = 0; i < rushers.units.length; i += 1) {
+      previousRushers[i].x = rushers.units[i].position.x;
+      previousRushers[i].y = rushers.units[i].position.y;
+      previousRushers[i].z = rushers.units[i].position.z;
     }
 
     assert.equal(quill.poolSize, QUILL_POOL_CAP);
@@ -221,7 +244,13 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
     assert.ok(aliveCount(enforcers.decals) <= GORE_DECAL_CAP);
     assert.ok(wisps.aliveCount() <= DRONE_CAP);
     assert.ok(enforcers.aliveCount() <= ENFORCER_CAP);
-    assert.ok(wisps.aliveCount() + enforcers.aliveCount() <= DRONE_CAP + ENFORCER_CAP);
+    assert.equal(rushers.units.length, RUSHER_CAP);
+    assert.equal(rushers.trails.length, RUSHER_TRAIL_CAP);
+    assert.equal(rushers.spray.length, GORE_SPRAY_CAP);
+    assert.equal(rushers.gibs.length, GORE_GIB_CAP);
+    assert.equal(rushers.decals.length, GORE_DECAL_CAP);
+    assert.ok(rushers.aliveCount() <= RUSHER_CAP);
+    assert.ok(wisps.aliveCount() + enforcers.aliveCount() + rushers.aliveCount() <= DRONE_CAP + ENFORCER_CAP + RUSHER_CAP);
     maxDrones = Math.max(maxDrones, wisps.aliveCount());
     maxEnforcers = Math.max(maxEnforcers, enforcers.aliveCount());
     maxWave = Math.max(maxWave, wisps.wave);
@@ -237,6 +266,12 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
       finiteVec(unit.position, `enforcer ${i}`);
       if (!unit.alive) continue;
       assert.equal(enforcerInsideVolume(unit.position), true, `enforcer escaped ${fmt(unit.position)}`);
+    }
+    for (let i = 0; i < rushers.units.length; i += 1) {
+      const unit = rushers.units[i];
+      finiteVec(unit.position, `rusher ${i}`);
+      if (!unit.alive) continue;
+      assert.equal(rusherInsideVolume(unit.position), true, `rusher escaped ${fmt(unit.position)}`);
     }
     for (let i = 0; i < wisps.bolts.length; i += 1) {
       const bolt = wisps.bolts[i];
@@ -318,7 +353,7 @@ test("early-release soak stays bounded for a scripted fight", { timeout: 600_000
   );
 });
 
-function aimAt(origin, drones, previous, hounds, previousHounds, out, look) {
+function aimAt(origin, drones, previous, hounds, previousHounds, flankers, previousFlankers, out, look) {
   let bestD = Infinity;
   let dx = 0;
   let dy = 0;
@@ -344,6 +379,7 @@ function aimAt(origin, drones, previous, hounds, previousHounds, out, look) {
   };
   let houndAlive = false;
   for (let i = 0; i < hounds.length; i += 1) if (hounds[i].alive) houndAlive = true;
+  for (let i = 0; i < flankers.length; i += 1) if (flankers[i].alive) houndAlive = true;
   if (!houndAlive) {
     for (let i = 0; i < drones.length; i += 1) {
       const drone = drones[i];
@@ -355,6 +391,11 @@ function aimAt(origin, drones, previous, hounds, previousHounds, out, look) {
     const unit = hounds[i];
     const prior = previousHounds[i];
     consider(unit.alive, unit.position.x, unit.position.y, unit.position.z, prior.x, prior.y, prior.z, 0.95, 0);
+  }
+  for (let i = 0; i < flankers.length; i += 1) {
+    const unit = flankers[i];
+    const prior = previousFlankers[i];
+    consider(unit.alive, unit.position.x, unit.position.y, unit.position.z, prior.x, prior.y, prior.z, 0.9, 0);
   }
   const len = Math.hypot(dx, dy, dz);
   if (!(bestD < Infinity) || len < 1e-4) {
@@ -382,9 +423,14 @@ function nearestPad(position, pads, kind) {
   return best;
 }
 
-function threatNear(position, drones, hounds, reach) {
+function threatNear(position, drones, hounds, flankers, reach) {
   for (let i = 0; i < hounds.length; i += 1) {
     const unit = hounds[i];
+    if (!unit.alive) continue;
+    if (Math.hypot(unit.position.x - position.x, unit.position.z - position.z) < reach) return true;
+  }
+  for (let i = 0; i < flankers.length; i += 1) {
+    const unit = flankers[i];
     if (!unit.alive) continue;
     if (Math.hypot(unit.position.x - position.x, unit.position.z - position.z) < reach) return true;
   }

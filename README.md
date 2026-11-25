@@ -79,7 +79,7 @@ A flechette that hits an enemy flashes a white-cyan X on the crosshair for 80 ms
 
 ## WISP-4
 
-The early release ships two enemies. The WISP-4 is a rogue security drone. Wave 1 spawns two, already hostile, at least 8 m from the player and clear of the hulls. Each is a low-poly hovering disc with cyan running lights and a visor slit that is red while it is aggro. It has 40 HP and no armor. Only VEC-9 flechettes damage it, through the projectile hitbox sweep. There is no hitscan.
+The early release ships three enemies. The WISP-4 is a rogue security drone. Wave 1 spawns two, already hostile, at least 8 m from the player and clear of the hulls. Each is a low-poly hovering disc with cyan running lights and a visor slit that is red while it is aggro. It has 40 HP and no armor. Only VEC-9 flechettes damage it, through the projectile hitbox sweep. There is no hitscan.
 
 It hovers at 5.5 m/s and strafe-orbits, preferring 8–14 m. Altitude stays 1.2–2.4 m above the deck under it. Inside 6 m it takes the high end of that band. A player on a catwalk makes it climb clear of the parapet, then drop to the low band to peek. It does not use cover, and it stays inside the 32 × 32 × 9 atrium.
 
@@ -91,9 +91,15 @@ The enforcer is a low-poly armored humanoid with an opaque visor, bulky shoulder
 
 The stun-blaster is a short hitscan cone. It checks the atrium hull first, so it does not shoot through walls. A hit is 12 damage through the armor rule, the interval is 0.90 s, and the shot only counts inside 12 m. It tries to hold 4–8 m. The visor slit is an amber-red lamp, and each shot draws a short muzzle flash plus a hitscan tracer so the round reads in the dark. It does not fire for 2 seconds after a spawn, a restart, or a new wave. If it takes 25 or more damage inside one second, it sidesteps for about a second and then pushes again. A defeat is a collapse, a spark burst, and a blood spray with abstract gibs and short-lived blood decals on nearby floors and walls. The player, the pickups, and the atrium props do not gib. Those sparks, the gore, and the enforcers themselves are pooled.
 
+## Cyber-Ganger Rusher
+
+The rusher is a low-poly street-gang flanker: a hood, an asymmetric shoulder, and a neon-magenta blade. It is a fictional silhouette, not a real person and not a political caricature. It has 35 HP and no armor. It stays on the ground, moves at 6.4 m/s, and climbs the atrium ramps and stairs on the same routes as the enforcer. It does not cut through the well.
+
+Inside 2.2 m it holds for a 0.25 s telegraph, then lunges for 14 melee damage. The blade leaves a short magenta trail during the lunge. The next telegraph waits 0.85 s. It does not lunge for 2 seconds after a spawn or a new wave. Four primary Quill hits (9 each) kill it. Three leave it at 8 HP. One alt-fire burst is three flechettes at 18 each, 54 total, and that kills it. A death uses the same fictional blood, gibs, and decals as the enforcer. The body, the trail, and the gore are procedural geometry, and the meshes stay hidden until a rusher is actually on screen.
+
 ## Waves
 
-There is no last wave and no arena-clear screen. `waveComposition` is the schedule: wave 1 is 2 drones, the first enforcer arrives on wave 2, each clear adds one drone, a second enforcer arrives on wave 3, and the cap is 4 drones and 2 enforcers. With `ENFORCER_ENABLED` on, those waves are 2+0, 3+1, 4+2, 4+2. Wave 1 drones wait 3 seconds before they fire, and their bursts are 2.78 seconds apart. Later waves keep the 2 second spawn grace and the 1.8 second burst. The next wave waits about 2 seconds after the current one is fully dead. Spawns stay at least 8 m from the player, inside the atrium, and outside the hulls. At most 4 drones and 2 enforcers are alive at once.
+There is no last wave and no arena-clear screen. `waveComposition` is the schedule: wave 1 is 2 drones, the first enforcer and the first rusher arrive on wave 2, each clear adds one drone, a second enforcer arrives on wave 3, a second rusher arrives on wave 4, and the cap is 4 drones, 2 enforcers, and 2 rushers. With `ENFORCER_ENABLED` on, those waves are 2+0+0, 3+1+1, 4+2+1, then 4+2+2. Wave 1 drones wait 3 seconds before they fire, and their bursts are 2.78 seconds apart. Later waves keep the 2 second spawn grace and the 1.8 second burst. The next wave waits about 2 seconds after the current one is fully dead. Spawns stay at least 8 m from the player, inside the atrium, and outside the hulls. At most 4 drones, 2 enforcers, and 2 rushers are alive at once.
 
 ## Death
 

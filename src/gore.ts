@@ -1,4 +1,4 @@
-// Blood for the UNIT-7 Hound only.
+// Blood for the UNIT-7 Hound and the Cyber-Ganger Rusher.
 //
 // A death sprays pooled droplets, throws a few abstract chunks, and stamps
 // short-lived decals on the atrium surface the rays actually hit. The player,

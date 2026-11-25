@@ -169,6 +169,9 @@ async function assertDrones(page, errors, label) {
   if (drones.enforcerAlive !== 0) {
     errors.push(`${label}: expected no wave 1 enforcer, saw ${drones.enforcerAlive}`);
   }
+  if (drones.rusherAlive !== 0) {
+    errors.push(`${label}: expected no wave 1 rusher, saw ${drones.rusherAlive}`);
+  }
   for (const drone of alive) {
     if (!drone.alive) errors.push(`${label}: a WISP-4 is already dead`);
     if (!drone.aggro) errors.push(`${label}: a WISP-4 is not aggro`);
@@ -1193,45 +1196,53 @@ async function assertShellFlow(page, errors) {
     errors.push("f1 did not hide the fps readout");
   }
 
-  await page.keyboard.press("Escape");
-  try {
-    await page.waitForFunction(
-      () => {
-        const shell = document.querySelector("#app-shell");
-        return shell?.getAttribute("data-phase") === "paused" && document.pointerLockElement == null;
-      },
-      undefined,
-      { timeout: 2_000 },
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`escape did not pause and release the pointer: ${message}`);
-  }
-  await expectPhase(page, errors, "paused", "after escape");
-  if (await page.locator("#content-warning").evaluate((el) => !el.hidden)) {
-    errors.push("warning returned when pausing");
-  }
-  if (await lockHeld()) errors.push("pointer still locked while paused");
-  const pausedHud = await page.locator("#hud").evaluate((el) => ({
-    mode: el.getAttribute("data-mode"),
-    opacity: Number(getComputedStyle(el).opacity),
-  }));
-  if (pausedHud.mode !== "dim") errors.push(`hud not dimmed on pause (${pausedHud.mode ?? "missing"})`);
-  else if (!(pausedHud.opacity < 1)) errors.push(`pause hud opacity is ${pausedHud.opacity}`);
+  const hpBeforePause = Number((await page.locator("#hud-hp").innerText()).trim());
+  // Slow frames let the drones finish the player before Escape. Death is the
+  // recap, and the dedicated pause page still checks pause. A living player
+  // still has to pause and resume here.
+  if (!(hpBeforePause > 0)) {
+    console.log("player died before pause; death recap stands in for this pause check");
+  } else {
+    await page.keyboard.press("Escape");
+    try {
+      await page.waitForFunction(
+        () => {
+          const shell = document.querySelector("#app-shell");
+          return shell?.getAttribute("data-phase") === "paused" && document.pointerLockElement == null;
+        },
+        undefined,
+        { timeout: 2_000 },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      errors.push(`escape did not pause and release the pointer: ${message}`);
+    }
+    await expectPhase(page, errors, "paused", "after escape");
+    if (await page.locator("#content-warning").evaluate((el) => !el.hidden)) {
+      errors.push("warning returned when pausing");
+    }
+    if (await lockHeld()) errors.push("pointer still locked while paused");
+    const pausedHud = await page.locator("#hud").evaluate((el) => ({
+      mode: el.getAttribute("data-mode"),
+      opacity: Number(getComputedStyle(el).opacity),
+    }));
+    if (pausedHud.mode !== "dim") errors.push(`hud not dimmed on pause (${pausedHud.mode ?? "missing"})`);
+    else if (!(pausedHud.opacity < 1)) errors.push(`pause hud opacity is ${pausedHud.opacity}`);
 
-  await page.locator("#pause-resume").click();
-  await expectPhase(page, errors, "playing", "after resume");
-  if (await page.locator("#content-warning").evaluate((el) => !el.hidden)) {
-    errors.push("warning returned when resuming");
-  }
-  if (await page.locator("#pause").evaluate((el) => !el.hidden)) {
-    errors.push("pause overlay still visible after resume");
-  }
-  const resumedHud = await hudMode(page);
-  // A WISP-4 bolt can drop the player during the readout. Death is the
-  // click-to-restart recap; pause still returns to that or to play.
-  if (resumedHud !== "play" && resumedHud !== "dead") {
-    errors.push(`hud did not return after resume (${resumedHud ?? "missing"})`);
+    await page.locator("#pause-resume").click();
+    await expectPhase(page, errors, "playing", "after resume");
+    if (await page.locator("#content-warning").evaluate((el) => !el.hidden)) {
+      errors.push("warning returned when resuming");
+    }
+    if (await page.locator("#pause").evaluate((el) => !el.hidden)) {
+      errors.push("pause overlay still visible after resume");
+    }
+    const resumedHud = await hudMode(page);
+    // A WISP-4 bolt can drop the player during the readout. Death is the
+    // click-to-restart recap; pause still returns to that or to play.
+    if (resumedHud !== "play" && resumedHud !== "dead") {
+      errors.push(`hud did not return after resume (${resumedHud ?? "missing"})`);
+    }
   }
 
   const stored = await page.evaluate(() => Object.keys(localStorage));
@@ -1249,6 +1260,179 @@ async function assertShellFlow(page, errors) {
   if (await lockHeld()) errors.push("enter locked the pointer from the warning");
   await page.keyboard.press("Space");
   await expectPhase(page, errors, "playing", "after space on click-to-play");
+}
+
+async function measureWave4(page, errors) {
+  try {
+    await page.evaluate(() => window.__fragRun.killAlive());
+    await page.waitForFunction(
+      () => {
+        const snap = window.__fragRun?.snapshot;
+        return snap && snap.wave >= 4 && snap.count === 4 && snap.enforcerAlive === 2 && snap.rusherAlive === 2;
+      },
+      undefined,
+      { timeout: 20_000, polling: 100 },
+    );
+    const report = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      const snap = window.__fragRun.snapshot;
+      const stats = canvas instanceof HTMLCanvasElement ? canvas.fragStats : null;
+      return {
+        wave: snap.wave,
+        count: snap.count,
+        enforcerAlive: snap.enforcerAlive,
+        rusherAlive: snap.rusherAlive,
+        calls: stats?.calls ?? 0,
+        triangles: stats?.triangles ?? 0,
+        lines: stats?.lines ?? 0,
+        points: stats?.points ?? 0,
+      };
+    });
+    console.log(
+      `wave 4 scene draw calls ${report.calls}, triangles ${report.triangles}, lines ${report.lines}, points ${report.points}, drones ${report.count}, enforcers ${report.enforcerAlive}, rushers ${report.rusherAlive}`,
+    );
+    if (!(report.calls > 0 && report.calls <= 80)) {
+      errors.push(`wave 4 draw calls ${report.calls} outside 1..80`);
+    }
+    if (!(report.triangles > 0 && report.triangles <= 50_000)) {
+      errors.push(`wave 4 triangles ${report.triangles} outside 1..50000`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    const snap = await page.evaluate(() => window.__fragRun?.snapshot ?? null);
+    errors.push(`wave 4 scene was not fielded (${JSON.stringify(snap)}): ${message}`);
+  }
+}
+
+function readSimClock() {
+  const canvas = document.querySelector("canvas");
+  const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+  return {
+    sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+    frames: typeof sim?.frames === "number" ? sim.frames : 0,
+  };
+}
+
+/** Wait until the live sim has drawn more frames. A stall is a hang guard, not a navigation deadline. */
+async function waitRenderedFrames(page, count) {
+  const start = await page.evaluate(readSimClock);
+  return settleSimVerdict({
+    hangMs: 45_000,
+    read: () => page.evaluate(readSimClock),
+    judge: (live) => {
+      if (!Number.isFinite(live.sim) || !Number.isFinite(start.sim)) {
+        return { state: "pending" };
+      }
+      if (live.frames >= start.frames + count) return { state: "pass" };
+      if (live.sim - start.sim > 2) {
+        return {
+          state: "fail",
+          code: "not-drawn",
+          reason: `sim +${(live.sim - start.sim).toFixed(3)}s but only ${live.frames - start.frames} new frames`,
+        };
+      }
+      return { state: "pending" };
+    },
+  });
+}
+
+async function captureRusherLunge(page, errors) {
+  try {
+    if ((await page.evaluate(() => document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "")) === "paused") {
+      await page.locator("#pause-resume").click();
+    }
+    const sample = () =>
+      page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        if (!(canvas instanceof HTMLCanvasElement)) return { error: "canvas missing" };
+        const probe = document.createElement("canvas");
+        probe.width = canvas.width;
+        probe.height = canvas.height;
+        const context = probe.getContext("2d", { willReadFrequently: true });
+        if (!context) return { error: "2d context missing" };
+        context.drawImage(canvas, 0, 0);
+        const x0 = Math.floor(canvas.width * 0.32);
+        const x1 = Math.floor(canvas.width * 0.68);
+        const y0 = Math.floor(canvas.height * 0.4);
+        const y1 = Math.floor(canvas.height * 0.92);
+        const image = context.getImageData(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+        const data = image.data;
+        let hot = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const red = data[i] ?? 0;
+          const green = data[i + 1] ?? 0;
+          const blue = data[i + 2] ?? 0;
+          if (red > 170 && blue > 120 && red > green + 12) hot += 1;
+        }
+        const sim = canvas.fragSim;
+        return {
+          hot,
+          png: probe.toDataURL("image/png"),
+          sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+          frames: typeof sim?.frames === "number" ? sim.frames : 0,
+        };
+      });
+    const faced = await page.evaluate(() => {
+      const run = window.__fragRun;
+      if (!run || typeof run.faceSpawn !== "function" || typeof run.poseLunge !== "function") {
+        return { error: "rusher capture hooks missing" };
+      }
+      run.faceSpawn();
+      return { ok: true };
+    });
+    if (faced.error) {
+      errors.push(faced.error);
+      return;
+    }
+    const facedFrame = await waitRenderedFrames(page, 1);
+    if (facedFrame.verdict.state !== "pass") {
+      const reason = facedFrame.verdict.state === "fail" ? facedFrame.verdict.reason : "frame sample missing";
+      errors.push(`rusher capture did not draw the spawn view (${reason})`);
+      return;
+    }
+    const before = await sample();
+    if (before.error) {
+      errors.push(`rusher capture before pose: ${before.error}`);
+      return;
+    }
+    const posed = await page.evaluate(() => {
+      window.__fragRun.poseLunge();
+      return { ok: true };
+    });
+    if (posed.error) {
+      errors.push(posed.error);
+      return;
+    }
+    const posedFrame = await waitRenderedFrames(page, 1);
+    if (posedFrame.verdict.state !== "pass") {
+      const reason = posedFrame.verdict.state === "fail" ? posedFrame.verdict.reason : "frame sample missing";
+      errors.push(`rusher capture did not draw the lunge (${reason})`);
+      return;
+    }
+    const after = await sample();
+    if (after.error) {
+      errors.push(`rusher capture after pose: ${after.error}`);
+      return;
+    }
+    const captures = [];
+    const tmp = "/tmp/rusher-lunge.png";
+    if (writePng(after.png, tmp)) captures.push(tmp);
+    const artifacts = "/opt/cursor/artifacts";
+    if (fs.existsSync(artifacts)) {
+      const saved = path.join(artifacts, "rusher-lunge.png");
+      if (writePng(after.png, saved)) captures.push(saved);
+    }
+    console.log(
+      `rusher lunge capture hot ${before.hot}->${after.hot} at sim ${before.sim.toFixed(3)}->${after.sim.toFixed(3)} frames ${before.frames}->${after.frames}, files ${captures.join(", ") || "unsaved"}`,
+    );
+    if (!(after.hot > before.hot + 8)) {
+      errors.push(`rusher lunge was not visible (hot ${before.hot}->${after.hot})`);
+    }
+    if (captures.length === 0) errors.push("rusher lunge capture was not written");
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`rusher capture failed: ${message}`);
+  }
 }
 
 const devPort = Number(process.env.FRAG_DEV_PORT ?? 5174);
@@ -1279,6 +1463,11 @@ async function runDevSmoke(browser, errors) {
   };
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   if (process.env.FRAG_SLOW_FRAMES === "1") await installSlowFrames(page);
+  // The lunge capture reads this same page. The flag has to be set before the
+  // context exists. The production checkpoint page does not set it.
+  await page.addInitScript(() => {
+    window.__fragKeepDrawingBuffer = true;
+  });
   try {
     noteConsole(page, errors, "dev");
     page.on("request", (request) => {
@@ -1395,13 +1584,22 @@ async function runDevSmoke(browser, errors) {
 
     const pitched = await page.evaluate(readLook);
     const session = await page.context().newCDPSession(page);
-    await session.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: 640,
-      y: 400,
-      movementX: 80,
-      movementY: -400,
-    });
+    // Headless pointer lock sometimes drops the first movement. Send it until
+    // the view leaves spawn facing, then the sim judge confirms the turn.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const locked = await page.evaluate(() => document.pointerLockElement != null);
+      if (!locked) await page.locator("canvas").click({ force: true });
+      await session.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: 640,
+        y: 400,
+        movementX: 120,
+        movementY: -400,
+      });
+      const turnedYet = await page.evaluate(readLook);
+      if (Math.abs(turnedYet.yaw) > 5 || Math.abs(turnedYet.pitch) > 5) break;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
     await session.detach();
     // The look is sampled on a later sim frame. A software-GL frame can block
     // for longer than 3 s of wall time, so the old deadline expired while the
@@ -1585,7 +1783,9 @@ async function runDevSmoke(browser, errors) {
       if (report.enforcerAlive !== 2 || report.count !== 4) {
         errors.push(`wave 3 roster drones ${report.count} enforcers ${report.enforcerAlive}`);
       }
+      await measureWave4(page, errors);
     }
+    await captureRusherLunge(page, errors);
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`dev smoke failed: ${message}`);

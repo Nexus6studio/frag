@@ -46,6 +46,7 @@ import { mountShell } from "./shell";
 import { exposeRunDebug } from "./wisp.ts";
 import { mountWispView } from "./wisp-view.ts";
 import { mountEnforcerView } from "./enforcer-view.ts";
+import { mountRusherView } from "./rusher-view.ts";
 
 function harnessFlag(name: "__fragKeepDrawingBuffer"): boolean {
   const host = globalThis as unknown as Record<string, unknown>;
@@ -167,8 +168,10 @@ const quillView = mountQuillView(scene, camera, quill, debugTarget);
 const fight = createFight({ hull, player, hitboxes: playerHitboxes, origin: ATRIUM_SPAWN, onEvent: hear });
 const wisps = fight.wisps;
 const enforcers = fight.enforcers;
+const rushers = fight.rushers;
 const wispView = mountWispView(scene, wisps, camera);
 const enforcerView = mountEnforcerView(scene, enforcers);
+const rusherView = mountRusherView(scene, rushers);
 
 let walkPhase = 0;
 
@@ -277,14 +280,35 @@ if (import.meta.env.DEV) {
     const next = applyDamage(damage, current.hp, current.armor);
     player.set({ hp: next.hp, armor: next.armor });
   });
-  exposeRunDebug(window, {
+  const runDebug = {
     killAlive(): void {
       fight.killAll();
     },
     snapshot() {
       return fight.snapshot();
     },
-  });
+    faceSpawn(): void {
+      look.setSensitivity(0);
+      look.reset();
+      // The capture runs on the live dev page, which may be mid-arena after
+      // wave 4. Park on the south concourse so the lunge is in the open view.
+      mover = createAtriumMover(createMoveState(ATRIUM_SPAWN), hearLaunch);
+    },
+    poseLunge(): void {
+      const yawRad = (look.yaw * Math.PI) / 180;
+      const ahead = 1.45;
+      const feet = mover.state.position;
+      rushers.poseLunge(
+        {
+          x: feet.x + -Math.sin(yawRad) * ahead,
+          y: feet.y,
+          z: feet.z + -Math.cos(yawRad) * ahead,
+        },
+        yawRad + Math.PI,
+      );
+    },
+  };
+  exposeRunDebug(window, runDebug);
 }
 
 function resize(): void {
@@ -457,6 +481,7 @@ function frame(time: number): void {
     // not burn the spawn grace or leave a burst to land on resume.
     wisps.update(simDt, body.position);
     enforcers.update(simDt, body.position);
+    rushers.update(simDt, body.position);
   }
   hud.setWave(wisps.wave);
   hud.setCombat(feedback.sample());
@@ -475,6 +500,7 @@ function frame(time: number): void {
   quillView.sync();
   wispView.sync();
   enforcerView.sync();
+  rusherView.sync();
   shell.onFrame(time, {
     x: camera.position.x,
     y: camera.position.y,
