@@ -25,6 +25,8 @@ import { playerHitboxes } from "./hitbox.ts";
 import { mountHud } from "./hud/hud";
 import { createInput } from "./input";
 import { createLook } from "./look";
+import { mountPauseSettings } from "./pause-settings.ts";
+import { loadSettings, saveSettings } from "./settings.ts";
 import {
   CAMERA_NEAR,
   EYE_HEIGHT,
@@ -64,12 +66,20 @@ renderer.info.autoReset = false;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
+const settings = loadSettings();
 const audio = createAudio();
+if (settings.muted) audio.setMuted(true);
 const feedback = createCombatFeedback();
 let showMute = (muted: boolean): void => {
   muteShown = muted;
 };
 let muteShown = false;
+if (settings.muted) showMute(true);
+let pauseSettings: { setMuted(muted: boolean): void } = {
+  setMuted(muted: boolean): void {
+    settings.muted = muted;
+  },
+};
 const hear = (event: SimEvent): void => {
   audio.play(cueFor(event));
   if (event.type === "enemy-hit") feedback.noteHit(false);
@@ -81,7 +91,11 @@ const shell = mountShell(renderer.domElement, {
   },
   onMute() {
     audio.prime();
-    showMute(audio.toggleMute());
+    const muted = audio.toggleMute();
+    settings.muted = muted;
+    pauseSettings.setMuted(muted);
+    showMute(muted);
+    saveSettings(settings);
   },
 });
 let onPointerDown = (): void => {};
@@ -124,7 +138,11 @@ const camera = new PerspectiveCamera(50, 1, CAMERA_NEAR, 80);
 camera.position.set(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z);
 camera.rotation.order = "YXZ";
 camera.lookAt(ATRIUM_SPAWN.x, ATRIUM_SPAWN.y + EYE_HEIGHT, ATRIUM_SPAWN.z - 1);
-const look = createLook(camera);
+const look = createLook(camera, {
+  sensitivity: settings.sensitivity,
+  horizontalFov: settings.fov,
+  invertY: settings.invertY,
+});
 subscribePlayerHurt((source) => {
   feedback.noteDamage(look.yaw, camera.position, source);
 });
@@ -180,6 +198,17 @@ const hud = mountHud(player, {
 });
 showMute = (muted) => hud.setMuted(muted);
 if (muteShown) hud.setMuted(true);
+pauseSettings = mountPauseSettings(settings, (next) => {
+  settings.sensitivity = next.sensitivity;
+  settings.fov = next.fov;
+  settings.muted = next.muted;
+  settings.invertY = next.invertY;
+  look.setSensitivity(next.sensitivity);
+  look.setHorizontalFov(next.fov);
+  look.setInvertY(next.invertY);
+  showMute(audio.setMuted(next.muted));
+  saveSettings(settings);
+});
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
 const quillCommand = { fire: false, presses: 0, reload: false, origin: muzzle, direction: aim };
@@ -246,7 +275,7 @@ if (import.meta.env.DEV) {
 }
 
 function resize(): void {
-  // 105° horizontal. PerspectiveCamera.fov is vertical; look.resize derives it.
+  // Horizontal fov comes from the pause card. PerspectiveCamera.fov is vertical.
   look.resize(window.innerWidth, window.innerHeight);
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
@@ -384,6 +413,7 @@ function frame(time: number): void {
   const controls = input.sample(playing && living);
   if (playing && living) {
     if (pointerLocked) look.apply(controls.lookX, controls.lookY);
+    // Bracket steps stay on the live aim. They are not the saved sensitivity.
     if (controls.pressed.sensUp) look.nudgeSensitivity(1);
     if (controls.pressed.sensDown) look.nudgeSensitivity(-1);
     const intent = intentFromInput(controls, look.yaw);

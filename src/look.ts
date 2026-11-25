@@ -15,10 +15,10 @@ export const MIN_SENSITIVITY = 0.02;
 export const MAX_SENSITIVITY = 1;
 
 /**
- * Design FOV, locked at 105° horizontal.
+ * Default FOV, 105° horizontal. The pause card can replace it.
  *
  * three.js `PerspectiveCamera.fov` is the vertical field of view. The
- * vertical angle is derived from this horizontal angle and the viewport
+ * vertical angle is derived from the horizontal angle and the viewport
  * aspect (`width / height`), and recomputed on resize:
  *
  *   vertical = 2 * atan(tan(horizontal / 2) / aspect)
@@ -60,8 +60,8 @@ export function stepSensitivity(current: number, direction: -1 | 1): number {
 /**
  * Yaw and pitch in degrees. Mouse right turns right (yaw decreases: three.js
  * YXZ positive yaw looks toward -X). Mouse down looks down (pitch decreases:
- * positive pitch looks up). Pitch cannot pass ±89°, so the view does not
- * flip over the poles.
+ * positive pitch looks up) unless invert Y is on. Pitch cannot pass ±89°, so
+ * the view does not flip over the poles.
  */
 export function applyMouseLook(
   yawDeg: number,
@@ -69,10 +69,12 @@ export function applyMouseLook(
   movementX: number,
   movementY: number,
   sensitivity: number,
+  invertY = false,
 ): { yaw: number; pitch: number } {
+  const pitchSign = invertY ? 1 : -1;
   return {
     yaw: wrapYaw(yawDeg - movementX * sensitivity),
-    pitch: clampPitch(pitchDeg - movementY * sensitivity),
+    pitch: clampPitch(pitchDeg + movementY * sensitivity * pitchSign),
   };
 }
 
@@ -83,9 +85,18 @@ export interface LookView {
   readonly pitch: number;
 }
 
+export interface LookOptions {
+  sensitivity?: number;
+  horizontalFov?: number;
+  invertY?: boolean;
+}
+
 export interface LookRig {
   apply(movementX: number, movementY: number): void;
   nudgeSensitivity(direction: -1 | 1): void;
+  setSensitivity(next: number): void;
+  setInvertY(invert: boolean): void;
+  setHorizontalFov(degrees: number): void;
   resize(width: number, height: number): void;
   /** Add a transient pitch offset, in degrees, without changing the held aim. */
   setViewPunch(pitchDeg: number): void;
@@ -97,7 +108,7 @@ export interface LookRig {
   readonly view: LookView;
 }
 
-export function createLook(camera: PerspectiveCamera): LookRig {
+export function createLook(camera: PerspectiveCamera, options?: LookOptions): LookRig {
   const direction = new Vector3();
   // Setting euler order rewrites the quaternion from the old angles. Put the
   // lookAt orientation back so the view does not jump, then read yaw/pitch
@@ -108,7 +119,9 @@ export function createLook(camera: PerspectiveCamera): LookRig {
   camera.getWorldDirection(direction);
   let yaw = wrapYaw(Math.atan2(-direction.x, -direction.z) * RAD2DEG);
   let pitch = clampPitch(Math.asin(clampUnit(direction.y)) * RAD2DEG);
-  let sensitivity = MOUSE_SENSITIVITY_DEG_PER_PIXEL;
+  let sensitivity = options?.sensitivity ?? MOUSE_SENSITIVITY_DEG_PER_PIXEL;
+  let horizontalFov = options?.horizontalFov ?? HORIZONTAL_FOV_DEG;
+  let invertY = options?.invertY ?? false;
 
   function write(): void {
     camera.rotation.x = pitch * DEG2RAD;
@@ -116,16 +129,34 @@ export function createLook(camera: PerspectiveCamera): LookRig {
     camera.rotation.z = 0;
   }
 
+  function applyProjection(): void {
+    const aspect = camera.aspect > 0 ? camera.aspect : 1;
+    camera.fov = verticalFovDeg(horizontalFov, aspect);
+    camera.updateProjectionMatrix();
+  }
+
   return {
     apply(movementX: number, movementY: number): void {
       if (movementX === 0 && movementY === 0) return;
-      const next = applyMouseLook(yaw, pitch, movementX, movementY, sensitivity);
+      const next = applyMouseLook(yaw, pitch, movementX, movementY, sensitivity, invertY);
       yaw = next.yaw;
       pitch = next.pitch;
       write();
     },
     nudgeSensitivity(direction: -1 | 1): void {
       sensitivity = stepSensitivity(sensitivity, direction);
+    },
+    setSensitivity(next: number): void {
+      if (!Number.isFinite(next)) return;
+      sensitivity = next;
+    },
+    setInvertY(invert: boolean): void {
+      invertY = invert;
+    },
+    setHorizontalFov(degrees: number): void {
+      if (!Number.isFinite(degrees)) return;
+      horizontalFov = degrees;
+      applyProjection();
     },
     setViewPunch(pitchDeg: number): void {
       camera.rotation.x = clampPitch(pitch + pitchDeg) * DEG2RAD;
@@ -138,10 +169,8 @@ export function createLook(camera: PerspectiveCamera): LookRig {
       write();
     },
     resize(width: number, height: number): void {
-      const aspect = Math.max(width, 1) / Math.max(height, 1);
-      camera.aspect = aspect;
-      camera.fov = verticalFovDeg(HORIZONTAL_FOV_DEG, aspect);
-      camera.updateProjectionMatrix();
+      camera.aspect = Math.max(width, 1) / Math.max(height, 1);
+      applyProjection();
     },
     get yaw() {
       return yaw;

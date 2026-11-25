@@ -1,9 +1,11 @@
 // Click-to-play shell for the prototype.
 // Flow on every fresh load: content warning, then click-to-play, then pointer lock.
-// Esc pauses. Click or Enter resumes. Play does not wait on the lock: a rejected
-// request leaves the sim running, and a later canvas click asks for the lock again.
+// Esc pauses. Enter or the Resume button continues. A click on the settings
+// block stays in the card and does not ask for the pointer.
+// Play does not wait on the lock: a rejected request leaves the sim running,
+// and a later canvas click asks for the lock again.
 // Resuming stays in the session and does not show the warning again.
-// M is mute. It does not start play. Nothing here is written to localStorage.
+// M is mute. It does not start play. This module does not touch localStorage.
 
 type Phase = "warning" | "ready" | "playing" | "paused";
 
@@ -65,6 +67,7 @@ export function mountShell(
   const warning = required<HTMLElement>("#content-warning");
   const ready = required<HTMLElement>("#click-to-play");
   const pauseOverlay = required<HTMLElement>("#pause");
+  const resumeButton = required<HTMLButtonElement>("#pause-resume");
   const continueButton = required<HTMLButtonElement>("#content-warning-continue");
   const buildHash = required<HTMLElement>("#build-hash");
   const fps = required<HTMLElement>("#fps-readout");
@@ -195,19 +198,16 @@ export function mountShell(
     beginPlay();
   });
 
-  pauseOverlay.addEventListener("click", (event) => {
+  resumeButton.addEventListener("click", (event) => {
     event.preventDefault();
+    event.stopPropagation();
     beginPlay();
   });
 
-  // Resume if the overlay missed the click, and ask for the pointer again when
-  // play is already running but the lock was rejected or has not engaged.
+  // A rejected lock can be asked for again from the canvas. Pause does not
+  // resume from that click: only Resume and Enter leave the card.
   canvas.addEventListener("mousedown", (event) => {
     if (event.button !== 0) return;
-    if (phase === "paused") {
-      beginPlay();
-      return;
-    }
     if (phase === "playing" && document.pointerLockElement !== canvas && lockRequest === 0) {
       requestLock();
     }

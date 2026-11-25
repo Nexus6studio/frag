@@ -56,9 +56,12 @@
         outline: none;
       }
 
-      #click-to-play,
-      #pause {
+      #click-to-play {
         cursor: pointer;
+      }
+
+      #pause {
+        overflow: auto;
       }
 
       .panel {
@@ -151,6 +154,60 @@
         text-transform: none;
       }
 
+      #pause .settings {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 18px;
+        color: #d5d8e2;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      #pause .setting {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        column-gap: 12px;
+        row-gap: 6px;
+        align-items: center;
+      }
+
+      #pause .setting-label,
+      #pause .setting-value {
+        color: #d5d8e2;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      #pause .setting-value {
+        color: #f4f6fb;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #pause .setting input[type="range"] {
+        grid-column: 1 / -1;
+        width: 100%;
+        height: 16px;
+        margin: 0;
+        accent-color: #00e5ff;
+      }
+
+      #pause .setting-check {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #d5d8e2;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      #pause .setting-check input {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        accent-color: #00e5ff;
+      }
+
       #fps-readout {
         position: fixed;
         top: 10px;
@@ -213,7 +270,35 @@
       >
         <div class="panel">
           <h1 id="pause-title">Paused</h1>
-          <p class="copy">Click or press Enter to resume.</p>
+          <p class="copy">Press Enter or Resume.</p>
+          <div id="pause-settings" class="settings">
+            <label class="setting">
+              <span class="setting-label">Mouse sensitivity</span>
+              <span id="setting-sensitivity-value" class="setting-value">0.12</span>
+              <input
+                id="setting-sensitivity"
+                type="range"
+                min="0.05"
+                max="0.30"
+                step="0.01"
+                value="0.12"
+              />
+            </label>
+            <label class="setting">
+              <span class="setting-label">Field of view</span>
+              <span id="setting-fov-value" class="setting-value">105</span>
+              <input id="setting-fov" type="range" min="90" max="115" step="1" value="105" />
+            </label>
+            <label class="setting-check">
+              <input id="setting-mute" type="checkbox" />
+              <span class="setting-label">Mute</span>
+            </label>
+            <label class="setting-check">
+              <input id="setting-invert-y" type="checkbox" />
+              <span class="setting-label">Invert Y</span>
+            </label>
+          </div>
+          <button id="pause-resume" type="button">Resume</button>
         </div>
       </section>
 

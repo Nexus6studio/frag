@@ -158,6 +158,36 @@ test("restart facing clears yaw, pitch, and the camera, and keeps sensitivity", 
   assert.ok(Math.abs(camera.rotation.y) < 1e-6);
 });
 
+test("invert Y looks up when the mouse moves down", () => {
+  const inverted = applyMouseLook(0, 0, 0, 10, 0.12, true);
+  assert.equal(inverted.yaw, 0);
+  assert.ok(Math.abs(inverted.pitch - 1.2) < 1e-9);
+
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.rotation.order = "YXZ";
+  const look = createLook(camera, { invertY: true, sensitivity: 0.2 });
+  look.apply(0, 10);
+  assert.ok(look.pitch > 0, `mouse down looked down (${look.pitch})`);
+  look.setInvertY(false);
+  const pitch = look.pitch;
+  look.apply(0, 10);
+  assert.ok(look.pitch < pitch, "clearing invert Y did not look down");
+  assert.equal(look.sensitivity, 0.2);
+});
+
+test("the rig keeps a configured horizontal fov across resize", () => {
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  const look = createLook(camera, { horizontalFov: 90 });
+  look.resize(1280, 720);
+  assert.ok(Math.abs(horizontalFov(camera.fov, camera.aspect) - 90) < 1e-6);
+  look.setHorizontalFov(115);
+  assert.ok(Math.abs(horizontalFov(camera.fov, camera.aspect) - 115) < 1e-6);
+  look.resize(700, 900);
+  assert.ok(Math.abs(horizontalFov(camera.fov, camera.aspect) - 115) < 1e-6);
+  look.setSensitivity(0.05);
+  assert.equal(look.sensitivity, 0.05);
+});
+
 test("view punch offsets the camera without changing the held aim", () => {
   const camera = new PerspectiveCamera(50, 1, 0.1, 100);
   camera.rotation.order = "YXZ";
