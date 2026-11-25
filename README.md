@@ -95,7 +95,7 @@ The stun-blaster is a short hitscan cone. It checks the atrium hull first, so it
 
 The rusher is a low-poly street-gang flanker: a hood, an asymmetric shoulder, and a neon-magenta blade. It is a fictional silhouette, not a real person and not a political caricature. It has 35 HP and no armor. It stays on the ground, moves at 6.4 m/s, and climbs the atrium ramps and stairs on the same routes as the enforcer. It does not cut through the well.
 
-Inside 2.2 m it holds for a 0.25 s telegraph, then lunges for 14 melee damage. The blade leaves a short magenta trail during the lunge. The next telegraph waits 0.85 s. It does not lunge for 2 seconds after a spawn or a new wave. Four primary Quill hits kill it. Three leave it alive. One alt-fire burst, at the current 9 damage per flechette, is three hits and leaves it at 8 HP. A death uses the same fictional blood, gibs, and decals as the enforcer. The body, the trail, and the gore are procedural geometry, and the meshes stay hidden until a rusher is actually on screen.
+Inside 2.2 m it holds for a 0.25 s telegraph, then lunges for 14 melee damage. The blade leaves a short magenta trail during the lunge. The next telegraph waits 0.85 s. It does not lunge for 2 seconds after a spawn or a new wave. Four primary Quill hits (9 each) kill it. Three leave it at 8 HP. One alt-fire burst is three flechettes at 18 each, 54 total, and that kills it. A death uses the same fictional blood, gibs, and decals as the enforcer. The body, the trail, and the gore are procedural geometry, and the meshes stay hidden until a rusher is actually on screen.
 
 ## Waves
 

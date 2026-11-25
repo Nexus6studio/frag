@@ -11,7 +11,7 @@ import { createFight } from "../src/fight.ts";
 import { GORE_GIBS_PER_DEATH, GORE_SPRAY_PER_DEATH } from "../src/gore.ts";
 import { createHitboxWorld } from "../src/hitbox.ts";
 import { createPlayerState } from "../src/player/state.ts";
-import { QUILL_BURST, QUILL_CHARGE, QUILL_DAMAGE, createQuill } from "../src/quill.ts";
+import { QUILL_BURST, QUILL_BURST_DAMAGE, QUILL_CHARGE, QUILL_DAMAGE, createQuill } from "../src/quill.ts";
 import {
   RUSHER_ARMOR,
   RUSHER_COOLDOWN,
@@ -95,7 +95,7 @@ test("four primary flechettes kill a rusher and three leave it alive", () => {
   assert.equal(unit.hp, after, "a dead rusher still took a flechette");
 });
 
-test("one current alt-fire burst of 9-damage flechettes leaves a rusher alive", () => {
+test("one alt-fire burst of 18-damage flechettes kills a rusher", () => {
   const hull = openHull();
   const player = createPlayerState();
   const hitboxes = createHitboxWorld();
@@ -108,9 +108,11 @@ test("one current alt-fire burst of 9-damage flechettes leaves a rusher alive", 
   quill.update(QUILL_CHARGE, hold);
   assert.equal(quill.shotsFired, QUILL_BURST);
   quill.update(0.4, { ...hold, alt: false });
-  const burst = QUILL_BURST * QUILL_DAMAGE;
-  assert.equal(sim.units[0].hp, RUSHER_HP - burst);
-  assert.equal(sim.units[0].alive, true, "one alt-fire burst killed a rusher");
+  const burst = QUILL_BURST * QUILL_BURST_DAMAGE;
+  assert.equal(burst, 54);
+  assert.ok(burst >= RUSHER_HP);
+  assert.equal(sim.units[0].hp, 0);
+  assert.equal(sim.units[0].alive, false);
 });
 
 test("a rusher lunges only inside 2.2 m, after a 0.25 s telegraph, then waits 0.85 s", () => {
