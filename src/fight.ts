@@ -1,17 +1,19 @@
-// One wave clock for drones and enforcers. The gap starts only when both
-// pools are empty, and the next spawn refills both from that same plan.
+// One wave clock for drones, enforcers, and rushers. The gap starts only when
+// every pool is empty, and the next spawn refills all of them from one plan.
 
 import type { CueListener } from "./cues.ts";
 import type { Hull, Vec3 } from "./move.ts";
 import type { HitboxWorld } from "./hitbox.ts";
 import type { PlayerStore } from "./player/state.ts";
 import { createEnforcerSim, type EnforcerSim } from "./enforcer.ts";
+import { createRusherSim, type RusherSim } from "./rusher.ts";
 import { createWispSim, type WispSim, type WispSnapshot } from "./wisp.ts";
 import { createWaveDirector, type WaveDirector } from "./waves.ts";
 
 export interface Fight {
   readonly wisps: WispSim;
   readonly enforcers: EnforcerSim;
+  readonly rushers: RusherSim;
   readonly director: WaveDirector;
   update(dt: number, feet: Vec3): void;
   /** Age enemy hit flashes without stepping the fight. */
@@ -23,6 +25,8 @@ export interface Fight {
     enforcerHits: number;
     enforcerFirstShot: number | null;
     enforcerUnits: { x: number; y: number; z: number; alive: boolean; hp: number }[];
+    rusherAlive: number;
+    rusherLunges: number;
   };
 }
 
@@ -44,14 +48,32 @@ export function createFight(options: {
     onCleared: () => poke(),
     onEvent: options.onEvent,
   });
+  const rushers = createRusherSim({
+    hull: options.hull,
+    player: options.player,
+    hitboxes: options.hitboxes,
+    director,
+    onCleared: () => poke(),
+    onEvent: options.onEvent,
+  });
   const wisps = createWispSim({
     hull: options.hull,
     player: options.player,
     hitboxes: options.hitboxes,
     origin: options.origin,
     director,
-    alliesAlive: () => enforcers.aliveCount(),
-    onWaveSpawn: (plan, feet) => enforcers.spawnCount(plan.enforcers, feet),
+    alliesAlive: () => enforcers.aliveCount() + rushers.aliveCount(),
+    onWaveSpawn: (plan, feet) => {
+      enforcers.spawnCount(plan.enforcers, feet);
+      const occupied = [];
+      const hounds = enforcers.units;
+      for (let i = 0; i < hounds.length; i += 1) {
+        const unit = hounds[i]!;
+        if (!unit.alive) continue;
+        occupied.push({ x: unit.position.x, y: unit.position.y, z: unit.position.z });
+      }
+      rushers.spawnCount(plan.rushers, feet, occupied);
+    },
     onEvent: options.onEvent,
   });
   poke = () => wisps.notifyAllies();
@@ -59,22 +81,27 @@ export function createFight(options: {
   return {
     wisps,
     enforcers,
+    rushers,
     director,
     update(dt: number, feet: Vec3): void {
       wisps.update(dt, feet);
       enforcers.update(dt, feet);
+      rushers.update(dt, feet);
     },
     tickFlash(dt: number): void {
       wisps.tickFlash(dt);
       enforcers.tickFlash(dt);
+      rushers.tickFlash(dt);
     },
     killAll(): void {
       enforcers.killAlive();
+      rushers.killAlive();
       wisps.killAlive();
     },
     snapshot() {
       const drones = wisps.snapshot();
       const hounds = enforcers.snapshot();
+      const flankers = rushers.snapshot();
       return {
         ...drones,
         enforcerAlive: hounds.alive,
@@ -82,6 +109,8 @@ export function createFight(options: {
         enforcerHits: hounds.hits,
         enforcerFirstShot: hounds.firstShot,
         enforcerUnits: hounds.units,
+        rusherAlive: flankers.alive,
+        rusherLunges: flankers.lunges,
       };
     },
   };

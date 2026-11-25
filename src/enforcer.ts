@@ -14,8 +14,14 @@
 // player, the pads, and the props do not gib.
 
 import {
-  ATRIUM_RAMPS,
-  ATRIUM_STAIRS,
+  clearNavMemory,
+  createAtriumNav,
+  navFloorY,
+  navWaypoint,
+  type AtriumNav,
+  type NavNode,
+} from "./atrium-nav.ts";
+import {
   CATWALK_Y,
   CEILING_Y,
   GROUND_Y,
@@ -43,7 +49,7 @@ import { createBloodGore, type GoreDecal, type GorePart } from "./gore.ts";
 import { applyDamage } from "./pickups.ts";
 import { damagePlayer } from "./player/hurt.ts";
 import type { PlayerStore } from "./player/state.ts";
-import { traceRay, traceSegment, type TraceHit } from "./trace.ts";
+import { traceSegment, type TraceHit } from "./trace.ts";
 import { ENFORCER_CAP, type WaveDirector } from "./waves.ts";
 
 export const ENFORCER_HP = 80;
@@ -178,25 +184,16 @@ interface Unit extends EnforcerUnit {
   handle: HitboxHandle;
 }
 
-interface NavNode {
-  x: number;
-  z: number;
-  y: number;
-}
-
 const scratchHit: TraceHit = {
   t: 0,
   distance: 0,
   point: { x: 0, y: 0, z: 0 },
   normal: { x: 0, y: 0, z: 0 },
 };
-const downFrom: Vec3 = { x: 0, y: 0, z: 0 };
-const downDir: Vec3 = { x: 0, y: -1, z: 0 };
 const shotTo: Vec3 = { x: 0, y: 0, z: 0 };
 const shotFrom: Vec3 = { x: 0, y: 0, z: 0 };
 const steer = { x: 0, z: 0 };
 const steerIntent = { forward: 0, strafe: 0, jump: false as const, yawDeg: 0, wishSpeed: 0 };
-const pathStack: number[] = [];
 
 const SPARK_DIR: readonly (readonly [number, number, number])[] = [
   [0.85, 0.7, 0.2],
@@ -224,11 +221,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
   const hitboxes = options.hitboxes ?? playerHitboxes;
   const director = options.director;
   const graceTime = options.grace ?? ENFORCER_GRACE;
-  const nav = buildNav();
-  const edges = linkNav(nav.nodes);
-  const dist = new Float64Array(nav.nodes.length);
-  const prev = new Int16Array(nav.nodes.length);
-  const used = new Uint8Array(nav.nodes.length);
+  const nav = createAtriumNav();
 
   const units: Unit[] = [];
   for (let i = 0; i < ENFORCER_CAP; i += 1) {
@@ -320,7 +313,7 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
         }
       }
       remember(unit, feet, hull);
-      const intent = steerUnit(unit, hull, nav.nodes, edges, dist, prev, used);
+      const intent = steerUnit(unit, hull, nav);
       const next = stepMovement(unit.body, intent, dt, hull);
       // The shelf is the player's drop. Refuse a step that would put the hound on it.
       if (inJumpSlot(next.position.x, next.position.z) && !inJumpSlot(unit.body.position.x, unit.body.position.z)) {
@@ -489,53 +482,14 @@ export function createEnforcerSim(options: EnforcerOptions): EnforcerSim {
 function steerUnit(
   unit: Unit,
   hull: Hull,
-  nodes: readonly NavNode[],
-  edges: readonly number[][],
-  dist: Float64Array,
-  prev: Int16Array,
-  used: Uint8Array,
+  nav: AtriumNav,
 ): { forward: number; strafe: number; jump: false; yawDeg: number; wishSpeed: number } {
   const goal = unit.lastSeen;
   const pos = unit.position;
-  const sameDeck = deck(pos.y) === deck(goal.y) && deck(pos.y) !== 1;
-  const clear = sameDeck && routeClear(pos.x, pos.y, pos.z, goal.x, goal.y, goal.z, hull);
-  if (clear) {
-    steer.x = goal.x;
-    steer.z = goal.z;
-  } else {
-    // Keep the path until the goal's deck node changes. Rebuilding from the
-    // nearest node every step flips the ramp foot and the climber walks back down.
-    const end = nearestNode(nodes, goal.x, goal.z, goal.y);
-    const shifted = Math.hypot(pos.x - unit.anchorX, pos.z - unit.anchorZ);
-    if (shifted > 0.4) {
-      unit.anchorX = pos.x;
-      unit.anchorZ = pos.z;
-      unit.stuck = 0;
-    } else unit.stuck += 1 / 120;
-    const jammed = unit.stuck > 1.2;
-    if (unit.pathEnd !== end || unit.path.length === 0 || jammed) {
-      const start = nearestNode(nodes, pos.x, pos.z, pos.y);
-      writePath(nodes, edges, dist, prev, used, start, end, unit.path);
-      unit.pathEnd = end;
-      unit.pathCursor = jammed && unit.path.length > 1 ? 1 : 0;
-      unit.stuck = 0;
-      unit.anchorX = pos.x;
-      unit.anchorZ = pos.z;
-    }
-    while (unit.pathCursor < unit.path.length) {
-      const node = nodes[unit.path[unit.pathCursor]!]!;
-      if (Math.hypot(node.x - pos.x, node.z - pos.z) < 1.15) unit.pathCursor += 1;
-      else break;
-    }
-    if (unit.pathCursor >= unit.path.length) {
-      steer.x = goal.x;
-      steer.z = goal.z;
-    } else {
-      const node = nodes[unit.path[unit.pathCursor]!]!;
-      steer.x = node.x;
-      steer.z = node.z;
-    }
-  }
+  const aim = navWaypoint(pos, goal, unit, hull, nav);
+  const clear = aim.direct;
+  steer.x = aim.x;
+  steer.z = aim.z;
 
   const toX = goal.x - pos.x;
   const toZ = goal.z - pos.z;
@@ -645,220 +599,6 @@ function hurtSum(unit: Unit, now: number): number {
   return sum;
 }
 
-function deck(y: number): number {
-  if (y < 1.8) return 0;
-  if (y > 4.4) return 2;
-  return 1;
-}
-
-function routeClear(
-  ax: number,
-  ay: number,
-  az: number,
-  bx: number,
-  by: number,
-  bz: number,
-  hull: Hull,
-): boolean {
-  const steps = 8;
-  for (let i = 1; i <= steps; i += 1) {
-    const t = i / steps;
-    const x = ax + (bx - ax) * t;
-    const z = az + (bz - az) * t;
-    if (inJumpSlot(x, z)) return false;
-    const expect = ay + (by - ay) * t;
-    const y = floorY(x, Math.max(ay, by, expect) + 1.6, z, hull);
-    // The well floor is 0.8 m under the ring, so a straight line across it fails.
-    // A flat test floor stays at one height and stays clear.
-    if (Math.abs(y - expect) > 0.65) return false;
-    if (!capsuleClear({ x, y, z }, hull)) return false;
-  }
-  return true;
-}
-
-function floorY(x: number, y: number, z: number, hull: Hull): number {
-  downFrom.x = x;
-  downFrom.y = Math.min(CEILING_Y - 0.05, y);
-  downFrom.z = z;
-  const hit = traceRay(downFrom, downDir, 30, hull, scratchHit);
-  return hit ? hit.point.y : 0;
-}
-
-function nearestNode(nodes: readonly NavNode[], x: number, z: number, y: number): number {
-  let best = 0;
-  let bestScore = Infinity;
-  let fallback = 0;
-  let fallbackScore = Infinity;
-  for (let i = 0; i < nodes.length; i += 1) {
-    const node = nodes[i]!;
-    const horizontal = Math.hypot(node.x - x, node.z - z);
-    const dy = Math.abs(node.y - y);
-    const score = horizontal + dy * 4;
-    if (score < fallbackScore) {
-      fallbackScore = score;
-      fallback = i;
-    }
-    if (dy > 2.4) continue;
-    if (score < bestScore) {
-      bestScore = score;
-      best = i;
-    }
-  }
-  return bestScore < Infinity ? best : fallback;
-}
-
-function writePath(
-  nodes: readonly NavNode[],
-  edges: readonly number[][],
-  dist: Float64Array,
-  prev: Int16Array,
-  used: Uint8Array,
-  start: number,
-  end: number,
-  out: number[],
-): void {
-  out.length = 0;
-  if (start === end) {
-    out.push(start);
-    return;
-  }
-  for (let i = 0; i < nodes.length; i += 1) {
-    dist[i] = Infinity;
-    prev[i] = -1;
-    used[i] = 0;
-  }
-  dist[start] = 0;
-  for (;;) {
-    let pick = -1;
-    let best = Infinity;
-    for (let i = 0; i < nodes.length; i += 1) {
-      if (used[i] === 0 && dist[i]! < best) {
-        best = dist[i]!;
-        pick = i;
-      }
-    }
-    if (pick < 0 || pick === end) break;
-    used[pick] = 1;
-    const list = edges[pick]!;
-    for (let i = 0; i < list.length; i += 1) {
-      const next = list[i]!;
-      const node = nodes[pick]!;
-      const other = nodes[next]!;
-      const weight = Math.hypot(node.x - other.x, node.z - other.z);
-      const score = dist[pick]! + weight;
-      if (score < dist[next]!) {
-        dist[next] = score;
-        prev[next] = pick;
-      }
-    }
-  }
-  pathStack.length = 0;
-  for (let cursor = end; cursor >= 0; cursor = prev[cursor]!) pathStack.push(cursor);
-  for (let i = pathStack.length - 1; i >= 0; i -= 1) out.push(pathStack[i]!);
-}
-
-function buildNav(): { nodes: NavNode[] } {
-  const ne = ATRIUM_RAMPS.find((ramp) => ramp.id === "ne")!;
-  const nw = ATRIUM_RAMPS.find((ramp) => ramp.id === "nw")!;
-  const se = ATRIUM_STAIRS.find((stair) => stair.id === "se")!;
-  const sw = ATRIUM_STAIRS.find((stair) => stair.id === "sw")!;
-  const seX = (se.x0 + se.x1) / 2;
-  const swX = (sw.x0 + sw.x1) / 2;
-  const nodes: NavNode[] = [
-    { x: 0, z: 8.2, y: GROUND_Y },
-    { x: 8.1, z: 8.2, y: GROUND_Y },
-    { x: 8.2, z: 0, y: GROUND_Y },
-    { x: 8.1, z: -7.2, y: GROUND_Y },
-    { x: 0, z: -7.2, y: GROUND_Y },
-    { x: -8.1, z: -7.2, y: GROUND_Y },
-    { x: -8.2, z: 0, y: GROUND_Y },
-    { x: -8.1, z: 8.2, y: GROUND_Y },
-    { x: ne.lineX, z: -5.5, y: GROUND_Y },
-    { x: ne.lineX, z: -9.2, y: 3 },
-    { x: ne.lineX, z: -12, y: CATWALK_Y },
-    { x: ne.lineX, z: -14.5, y: CATWALK_Y },
-    { x: nw.lineX, z: -5.5, y: GROUND_Y },
-    { x: nw.lineX, z: -9.2, y: 3 },
-    { x: nw.lineX, z: -12, y: CATWALK_Y },
-    { x: nw.lineX, z: -14.5, y: CATWALK_Y },
-    { x: seX, z: 1.55, y: GROUND_Y },
-    { x: seX, z: 6.4, y: 3.2 },
-    { x: seX, z: 10.3, y: CATWALK_Y },
-    { x: 14.45, z: 10.3, y: CATWALK_Y },
-    { x: swX, z: 1.55, y: GROUND_Y },
-    { x: swX, z: 6.4, y: 3.2 },
-    { x: swX, z: 10.3, y: CATWALK_Y },
-    { x: -14.45, z: 10.3, y: CATWALK_Y },
-    { x: 0, z: -14.6, y: CATWALK_Y },
-    { x: 14.45, z: -14.6, y: CATWALK_Y },
-    { x: 14.45, z: -10, y: CATWALK_Y },
-    { x: 14.45, z: 0, y: CATWALK_Y },
-    { x: 14.45, z: 6, y: CATWALK_Y },
-    { x: 14.45, z: 14.6, y: CATWALK_Y },
-    { x: 0, z: 14.6, y: CATWALK_Y },
-    { x: -14.5, z: 14.6, y: CATWALK_Y },
-    { x: -14.5, z: 6, y: CATWALK_Y },
-    { x: -14.5, z: 0, y: CATWALK_Y },
-    { x: -14.5, z: -8, y: CATWALK_Y },
-    { x: -14.5, z: -14.6, y: CATWALK_Y },
-  ];
-  return { nodes };
-}
-
-function linkNav(nodes: readonly NavNode[]): number[][] {
-  const edges = nodes.map(() => [] as number[]);
-  const pairs = [
-    [0, 1],
-    [1, 2],
-    [2, 3],
-    [3, 4],
-    [4, 5],
-    [5, 6],
-    [6, 7],
-    [7, 0],
-    [1, 16],
-    [2, 16],
-    [3, 8],
-    [5, 12],
-    [6, 20],
-    [7, 20],
-    [8, 9],
-    [9, 10],
-    [10, 11],
-    [12, 13],
-    [13, 14],
-    [14, 15],
-    [16, 17],
-    [17, 18],
-    [18, 19],
-    [20, 21],
-    [21, 22],
-    [22, 23],
-    [24, 11],
-    [11, 25],
-    [25, 26],
-    [26, 27],
-    [27, 28],
-    [28, 19],
-    [19, 29],
-    [29, 30],
-    [30, 31],
-    [31, 32],
-    [32, 23],
-    [23, 33],
-    [33, 34],
-    [34, 35],
-    [35, 15],
-    [15, 24],
-  ];
-  for (let i = 0; i < pairs.length; i += 1) {
-    const pair = pairs[i]!;
-    edges[pair[0]!]!.push(pair[1]!);
-    edges[pair[1]!]!.push(pair[0]!);
-  }
-  return edges;
-}
-
 const SPAWNS: readonly NavNode[] = [
   { x: 0, z: -7.2, y: GROUND_Y },
   { x: 8.1, z: -7.2, y: GROUND_Y },
@@ -913,7 +653,7 @@ function planSpawns(feet: Vec3, hull: Hull, count: number): Vec3[] {
 function legalSpawn(x: number, z: number, y: number, feet: Vec3, hull: Hull): Vec3 | null {
   if (Math.abs(x) > MAP_HALF - 1 || Math.abs(z) > MAP_HALF - 1) return null;
   if (Math.abs(x) < WELL_HALF + 0.3 && Math.abs(z) < WELL_HALF + 0.3) return null;
-  const floor = floorY(x, y + 1.6, z, hull);
+  const floor = navFloorY(x, y + 1.6, z, hull);
   if (Math.abs(floor - y) > 0.35) return null;
   const point = { x, y: floor, z };
   if (!enforcerInsideVolume(point)) return null;
@@ -992,12 +732,7 @@ function activate(unit: Unit, point: Vec3, face: Vec3, grace: number): void {
   unit.lastSeen.y = face.y;
   unit.lastSeen.z = face.z;
   unit.hurtCount = 0;
-  unit.path.length = 0;
-  unit.pathCursor = 0;
-  unit.pathEnd = -1;
-  unit.anchorX = point.x;
-  unit.anchorZ = point.z;
-  unit.stuck = 0;
+  clearNavMemory(unit, point.x, point.z);
   const dx = face.x - point.x;
   const dz = face.z - point.z;
   if (Math.hypot(dx, dz) > 0.2) unit.yaw = Math.atan2(-dx, -dz);

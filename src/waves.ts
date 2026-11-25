@@ -1,16 +1,18 @@
 // Endless wave counts. There is no last wave and no arena clear.
 //
-// The GDD schedule is waveComposition. Wave 1 is 2 drones. The first
-// enforcer arrives on wave 2. Each clear adds one drone. A second enforcer
-// arrives on wave 3. The cap is 4 drones and 2 enforcers, and it stays there.
+// The schedule is waveComposition. Wave 1 is 2 drones. The first enforcer
+// and the first rusher arrive on wave 2. Each clear adds one drone. A second
+// enforcer arrives on wave 3. A second rusher arrives on wave 4. The cap is
+// 4 drones, 2 enforcers, and 2 rushers, and it stays there.
 //
-// ENFORCER_ENABLED gates the live spawner. The count below is what a wave
-// fields when the flag is on: 2+0, 3+1, then 4+2 forever.
+// ENFORCER_ENABLED gates the live enforcer spawner. Rushers are part of the
+// same plan. With the flag on, the waves are 2+0+0, 3+1+1, 4+2+1, then 4+2+2.
 
 export const ENFORCER_ENABLED = true;
 
 export const DRONE_CAP = 4;
 export const ENFORCER_CAP = 2;
+export const RUSHER_CAP = 2;
 
 /** Quiet gap after the last enemy of a wave dies, before the next spawn. */
 export const WAVE_GAP_SECONDS = 2;
@@ -20,6 +22,7 @@ export type WavePhase = "fighting" | "gap";
 export interface WavePlan {
   drones: number;
   enforcers: number;
+  rushers: number;
 }
 
 export interface DeathRecap {
@@ -33,6 +36,7 @@ export function waveComposition(wave: number): WavePlan {
   return {
     drones: Math.min(DRONE_CAP, n + 1),
     enforcers: Math.min(ENFORCER_CAP, n <= 1 ? 0 : n >= 3 ? 2 : 1),
+    rushers: Math.min(RUSHER_CAP, n <= 1 ? 0 : n >= 4 ? 2 : 1),
   };
 }
 
@@ -42,6 +46,7 @@ export function waveSpawnCounts(wave: number, enforcersEnabled = ENFORCER_ENABLE
   return {
     drones: plan.drones,
     enforcers: enforcersEnabled ? plan.enforcers : 0,
+    rushers: plan.rushers,
   };
 }
 
