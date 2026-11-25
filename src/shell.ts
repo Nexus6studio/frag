@@ -1,7 +1,8 @@
 // Click-to-play shell for the prototype.
 // Flow on every fresh load: content warning, then click-to-play, then pointer lock.
-// Esc pauses. Enter or the Resume button continues. A click on the settings
-// block stays in the card and does not ask for the pointer.
+// Esc pauses. So does any later loss of the pointer lock. Enter or the Resume
+// button continues. A click on the settings block stays in the card and does
+// not ask for the pointer. A death recap does not open the pause card.
 // Play does not wait on the lock: a rejected request leaves the sim running,
 // and a later canvas click asks for the lock again.
 // Resuming stays in the session and does not show the warning again.
@@ -16,7 +17,11 @@ const FPS_SAMPLE_MS = 250;
  * to a lock request still in flight: headless Chromium can grant the click's
  * lock and drop it before that request settles, and that drop is not Esc.
  * A release after the request has settled is a pause, including Esc in the
- * first second. A death-restart click is `hold` and is not a pause either.
+ * first second. The lock promise can stay pending for the whole hold, so a
+ * lock that is actually observed ends that window on the next turn. An unlock
+ * in the same turn as the grant is still the headless drop. A death-restart
+ * click is `hold` and is not a pause either. Neither is a lock loss while the
+ * player is already dead.
  */
 const PAUSE_RESUME = "fragPauseResume";
 
@@ -34,8 +39,11 @@ export function unlockShouldPause(input: {
   requestOpen: boolean;
   /** A death-restart click releases the lock. That release is not a pause. */
   hold?: boolean;
+  /** The death recap is up. A lock loss must leave that card in place. */
+  dead?: boolean;
 }): boolean {
   if (input.hold) return false;
+  if (input.dead) return false;
   if (input.phase !== "playing") return false;
   if (input.requestOpen) return false;
   return true;
@@ -54,7 +62,7 @@ export interface DebugPose {
 
 export function mountShell(
   canvas: HTMLCanvasElement,
-  hooks?: { onGesture?: () => void; onMute?: () => void },
+  hooks?: { onGesture?: () => void; onMute?: () => void; dead?: () => boolean },
 ): {
   readonly phase: Phase;
   /** True while the FPS readout (and the dev target volume) is showing. */
@@ -125,10 +133,24 @@ export function mountShell(
     requestLock();
   }
 
+  function playerIsDead(): boolean {
+    return hooks?.dead?.() === true;
+  }
+
+  function releaseLock(): void {
+    if (document.pointerLockElement !== null) document.exitPointerLock();
+  }
+
   function pause(): void {
     if (phase !== "playing") return;
+    // Esc while the recap is up must not cover it. Still drop the lock so
+    // the click-to-restart target can take the pointer.
+    if (playerIsDead()) {
+      releaseLock();
+      return;
+    }
     setPhase("paused");
-    if (document.pointerLockElement !== null) document.exitPointerLock();
+    releaseLock();
   }
 
   function toggleFps(): void {
@@ -220,15 +242,29 @@ export function mountShell(
     if (locked) {
       // Play is entered by the click or key that asked for the lock. A lock
       // that arrives after Esc, or during the warning, must not undo that.
-      if (phase !== "playing") document.exitPointerLock();
+      if (phase !== "playing") {
+        document.exitPointerLock();
+        return;
+      }
+      // requestPointerLock()'s promise can stay pending until the browser
+      // drops the lock. Clearing the token only from that promise made the
+      // first Esc release the cursor and leave the sim running. A held lock
+      // ends the in-flight window on the next turn. The unlock in this same
+      // turn is the headless grant-and-drop, and that one is not a pause.
+      const request = lockRequest;
+      if (request !== 0) {
+        setTimeout(() => {
+          if (lockRequest === request && document.pointerLockElement === canvas) lockRequest = 0;
+        }, 0);
+      }
       return;
     }
     const requestOpen = lockRequest !== 0;
     const held = restartHold;
     restartHold = false;
     if (requestOpen) lockRequest = 0;
-    if (unlockShouldPause({ phase, requestOpen, hold: held })) {
-      setPhase("paused");
+    if (unlockShouldPause({ phase, requestOpen, hold: held, dead: playerIsDead() })) {
+      pause();
     } else if (held && phase === "playing") {
       requestLock();
     }

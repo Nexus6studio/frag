@@ -145,8 +145,8 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function play(h) {
-  const shell = mountShell(h.canvas);
+function play(h, hooks) {
+  const shell = mountShell(h.canvas, hooks);
   h.elements.get("content-warning-continue").dispatch("click", clickEvent());
   assert.equal(shell.phase, "ready");
   h.elements.get("click-to-play").dispatch("click", clickEvent());
@@ -261,7 +261,7 @@ test("enter on pause does not confirm death when hp is already 0", (t) => {
   const h = createHarness();
   t.after(() => h.restore());
   const player = createPlayerState();
-  const shell = play(h);
+  const shell = play(h, { dead: () => player.get().hp <= 0 });
   let armed = false;
   let restarts = 0;
   // Registered after the shell, same order as the recap listener in main.
@@ -280,14 +280,20 @@ test("enter on pause does not confirm death when hp is already 0", (t) => {
     }
   });
 
-  player.set({ hp: 0 });
+  // Esc lands while the player is alive. A killing blow in that same turn
+  // must not turn the following Enter into a recap confirm.
   h.key("Escape");
+  assert.equal(shell.phase, "paused");
+  player.set({ hp: 0 });
   h.key("Enter");
   assert.equal(shell.phase, "playing");
   assert.equal(player.get().hp, 0);
   assert.equal(restarts, 0, "enter during the recap lockout restarted");
 
+  player.set({ hp: 100 });
   h.key("Escape");
+  assert.equal(shell.phase, "paused");
+  player.set({ hp: 0 });
   armed = true;
   h.key("Enter");
   assert.equal(shell.phase, "playing");
