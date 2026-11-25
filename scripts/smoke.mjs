@@ -2251,6 +2251,8 @@ async function assertChargeGlow(browser, errors) {
     });
     if (!suppressed) errors.push("canvas context menu was not suppressed");
 
+    // A background tab drops the sim clock, so the charge never advances.
+    await page.bringToFront();
     await page.locator("#content-warning-continue").click();
     await page.locator("#click-to-play").click();
     await page.waitForFunction(
@@ -2313,71 +2315,84 @@ async function assertChargeGlow(browser, errors) {
       return;
     }
 
-    await page.evaluate(() => {
-      window.__fragChargeShot = null;
-      window.__fragAltDown = false;
-    });
-    try {
-      // Press on the first poll, then copy the frame in the poll that sees the
-      // charge. A click sent before the wait can finish the 0.45 s hold before
-      // the first sample.
-      await page.waitForFunction(
-        () => {
-          if (!window.__fragAltDown) {
-            window.__fragAltDown = true;
-            window.dispatchEvent(
-              new MouseEvent("mousedown", { button: 2, buttons: 2, bubbles: true, cancelable: true }),
-            );
-          }
-          const canvas = document.querySelector("canvas");
-          const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
-          if (!sim || sim.charging !== true || !(sim.charge >= 0.12 && sim.charge < 0.95)) return false;
-          if (window.__fragChargeShot) return true;
-          const probe = document.createElement("canvas");
-          probe.width = canvas.width;
-          probe.height = canvas.height;
-          const context = probe.getContext("2d", { willReadFrequently: true });
-          if (!context) return false;
-          context.drawImage(canvas, 0, 0);
-          const x0 = Math.floor(canvas.width * 0.42);
-          const x1 = Math.floor(canvas.width * 0.78);
-          const y0 = Math.floor(canvas.height * 0.42);
-          const y1 = Math.floor(canvas.height * 0.86);
-          const image = context.getImageData(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
-          const data = image.data;
-          let hot = 0;
-          let cyan = 0;
-          let sum = 0;
-          const pixels = data.length / 4;
-          for (let i = 0; i < data.length; i += 4) {
-            const red = data[i] ?? 0;
-            const green = data[i + 1] ?? 0;
-            const blue = data[i + 2] ?? 0;
-            const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-            sum += luma;
-            if (luma > 170) hot += 1;
-            if (green > 140 && blue > 160 && blue > red + 15) cyan += 1;
-          }
-          window.__fragChargeShot = {
-            hot,
-            cyan,
-            mean: sum / pixels,
-            width: canvas.width,
-            height: canvas.height,
-            charge: sim.charge,
-            charging: sim.charging,
-            png: probe.toDataURL("image/png"),
+    // Watch from a frame callback. Two sim steps can finish the 0.45 s hold
+    // without yielding to a Playwright poll, so the poll never sees the glow.
+    const charged = await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const deadline = performance.now() + 8000;
+          window.dispatchEvent(
+            new MouseEvent("mousedown", { button: 2, buttons: 2, bubbles: true, cancelable: true }),
+          );
+          const step = () => {
+            const canvas = document.querySelector("canvas");
+            const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+            const ready = !!sim && sim.charging === true && sim.charge >= 0.12 && sim.charge < 0.95;
+            if (!ready) {
+              if (performance.now() > deadline) resolve(null);
+              else requestAnimationFrame(step);
+              return;
+            }
+            const probe = document.createElement("canvas");
+            const width = Math.max(1, Math.floor(canvas.width / 2));
+            const height = Math.max(1, Math.floor(canvas.height / 2));
+            probe.width = width;
+            probe.height = height;
+            const context = probe.getContext("2d", { willReadFrequently: true });
+            if (!context) {
+              resolve({ error: "2d context missing" });
+              return;
+            }
+            context.drawImage(canvas, 0, 0, width, height);
+            const x0 = Math.floor(width * 0.42);
+            const x1 = Math.floor(width * 0.78);
+            const y0 = Math.floor(height * 0.42);
+            const y1 = Math.floor(height * 0.86);
+            const image = context.getImageData(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+            const data = image.data;
+            let hot = 0;
+            let cyan = 0;
+            let sum = 0;
+            const pixels = data.length / 4;
+            for (let i = 0; i < data.length; i += 4) {
+              const red = data[i] ?? 0;
+              const green = data[i + 1] ?? 0;
+              const blue = data[i + 2] ?? 0;
+              const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+              sum += luma;
+              if (luma > 170) hot += 1;
+              if (green > 140 && blue > 160 && blue > red + 15) cyan += 1;
+            }
+            resolve({
+              hot,
+              cyan,
+              mean: sum / pixels,
+              width,
+              height,
+              charge: sim.charge,
+              charging: sim.charging,
+              png: probe.toDataURL("image/png"),
+            });
           };
-          return true;
-        },
-        undefined,
-        { timeout: 8_000, polling: 10 },
-      );
-    } catch {
-      errors.push("charge glow did not reach a visible mid-charge");
-    }
-    const charged = await page.evaluate(() => window.__fragChargeShot);
+          requestAnimationFrame(step);
+        }),
+    );
     if (!charged || charged.error) {
+      const stuck = await page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+        return {
+          phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+          hidden: document.hidden,
+          visibility: document.visibilityState,
+          hp: document.querySelector("#hud-hp")?.textContent ?? "",
+          sim: sim?.sim ?? null,
+          charge: sim?.charge ?? null,
+          charging: sim?.charging ?? null,
+          mag: sim?.mag ?? null,
+        };
+      }).catch(() => null);
+      errors.push(`charge glow did not reach a visible mid-charge ${JSON.stringify(stuck)}`);
       errors.push(`charge glow sample: ${charged?.error ?? "missing mid-charge frame"}`);
       return;
     }
