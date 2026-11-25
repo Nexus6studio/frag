@@ -5,6 +5,8 @@
 // Mute is a master gain held in memory. One-shots share a cap of eight.
 // Oscillator fundamentals stay at or under 900 Hz, and tones pass a soft lowpass,
 // so the short squares are not up in the ear's sensitive 2–5 kHz band.
+// The Quill charge is a sawtooth hum that rises across the 0.45 s hold and
+// uses that same lowpass. Releasing the charge, or firing it, stops the hum.
 // The low-HP heartbeat is a lub-dub of lowpassed noise. It stops when HP leaves
 // the low band, including death, and the beats stay 0.75 s apart.
 
@@ -110,6 +112,23 @@ const RECIPES: Record<CueId, Recipe> = {
   dry: {
     dur: 0.016,
     tones: [{ type: "square", from: 520, to: 390, dur: 0.012, gain: 0.05, at: 0 }],
+    noise: [],
+  },
+  // Rising hum for the Quill charge. The fundamental stays under 900 Hz.
+  // play() runs this as a voice that can be stopped early.
+  charge: {
+    dur: 0.45,
+    tones: [{ type: "sawtooth", from: 196, to: 880, dur: 0.45, gain: 0.07, at: 0 }],
+    noise: [],
+  },
+  "charge-end": {
+    dur: 0.01,
+    tones: [],
+    noise: [],
+  },
+  "charge-abort": {
+    dur: 0.08,
+    tones: [{ type: "sine", from: 480, to: 180, dur: 0.07, gain: 0.06, at: 0 }],
     noise: [],
   },
   "reload-slide": {
@@ -226,6 +245,7 @@ export function createAudio(host?: AudioHost): {
   let beating = false;
   let nextBeat = 0;
   let heartStop: (() => void) | null = null;
+  let chargeVoice: Live | null = null;
   const live: Live[] = [];
 
   function prime(): void {
@@ -334,16 +354,73 @@ export function createAudio(host?: AudioHost): {
       const voice = live[i]!;
       if (voice.until > now) continue;
       voice.stop();
+      if (voice === chargeVoice) chargeVoice = null;
       live.splice(i, 1);
     }
+  }
+
+  function endCharge(): void {
+    const voice = chargeVoice;
+    chargeVoice = null;
+    if (!voice) return;
+    voice.stop();
+    const index = live.indexOf(voice);
+    if (index >= 0) live.splice(index, 1);
+  }
+
+  function beginCharge(): void {
+    if (!ctx || !master || chargeVoice) return;
+    const spec = RECIPES.charge.tones[0];
+    if (!spec) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    osc.type = spec.type;
+    filter.type = "lowpass";
+    filter.frequency.value = TONE_LOWPASS;
+    filter.Q.value = 0.5;
+    const now = ctx.currentTime;
+    at(filter.frequency, TONE_LOWPASS, now);
+    at(osc.frequency, spec.from, now);
+    if (spec.to !== spec.from) ramp(osc.frequency, spec.to, now + spec.dur);
+    at(gain.gain, spec.gain * 0.35, now);
+    if (gain.gain.linearRampToValueAtTime) gain.gain.linearRampToValueAtTime(spec.gain, now + spec.dur * 0.9);
+    else gain.gain.value = spec.gain;
+    ramp(gain.gain, 0.001, now + spec.dur);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(master);
+    osc.start(now);
+    osc.stop(now + spec.dur + 0.02);
+    const stop = stopper([osc, filter, gain], () => osc.stop());
+    const voice: Live = { stop, until: now + spec.dur + 0.02 };
+    osc.onended = () => {
+      stop();
+      if (chargeVoice === voice) chargeVoice = null;
+    };
+    chargeVoice = voice;
+    live.push(voice);
   }
 
   function play(cue: CueId): void {
     if (dead || !ctx || !master) return;
     try {
+      if (cue === "charge") {
+        beginCharge();
+        return;
+      }
+      if (cue === "charge-end") {
+        endCharge();
+        return;
+      }
+      if (cue === "charge-abort") endCharge();
       const now = ctx.currentTime;
       prune(now);
-      while (live.length >= MAX_VOICES) live.shift()?.stop();
+      while (live.length >= MAX_VOICES) {
+        const dropped = live.shift();
+        dropped?.stop();
+        if (dropped && dropped === chargeVoice) chargeVoice = null;
+      }
       const recipe = RECIPES[cue];
       const stops: Array<() => void> = [];
       for (const spec of recipe.tones) stops.push(tone(spec, now));
@@ -456,6 +533,7 @@ export function createAudio(host?: AudioHost): {
     cut(): void {
       for (const voice of live) voice.stop();
       live.length = 0;
+      chargeVoice = null;
       stopHeart();
     },
   };

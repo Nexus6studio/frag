@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -2219,6 +2220,211 @@ async function assertThrottledFire(browser, errors) {
   }
 }
 
+function writePng(dataUrl, filePath) {
+  const match = /^data:image\/png;base64,(.+)$/.exec(dataUrl ?? "");
+  if (!match) return false;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.from(match[1], "base64"));
+  return true;
+}
+
+async function assertChargeGlow(browser, errors) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  noteConsole(page, errors, "charge");
+  page.on("request", (request) => {
+    const url = request.url();
+    if (url.startsWith(`${origin}/`) || url === origin || url.startsWith("data:")) return;
+    errors.push(`charge glow unexpected network request: ${url}`);
+  });
+  try {
+    await page.addInitScript(() => {
+      window.__fragKeepDrawingBuffer = true;
+    });
+    await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector("canvas", { timeout: 20_000 });
+    const suppressed = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      if (!(canvas instanceof HTMLCanvasElement)) return false;
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+      canvas.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    if (!suppressed) errors.push("canvas context menu was not suppressed");
+
+    // A background tab drops the sim clock, so the charge never advances.
+    await page.bringToFront();
+    await page.locator("#content-warning-continue").click();
+    await page.locator("#click-to-play").click();
+    await page.waitForFunction(
+      () => document.querySelector("#app-shell")?.getAttribute("data-phase") === "playing",
+      undefined,
+      { timeout: 5_000 },
+    );
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+        }),
+    );
+
+    const sampleGlow = () =>
+      page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        if (!(canvas instanceof HTMLCanvasElement)) return { error: "canvas missing" };
+        const probe = document.createElement("canvas");
+        probe.width = canvas.width;
+        probe.height = canvas.height;
+        const context = probe.getContext("2d", { willReadFrequently: true });
+        if (!context) return { error: "2d context missing" };
+        context.drawImage(canvas, 0, 0);
+        const x0 = Math.floor(canvas.width * 0.42);
+        const x1 = Math.floor(canvas.width * 0.78);
+        const y0 = Math.floor(canvas.height * 0.42);
+        const y1 = Math.floor(canvas.height * 0.86);
+        const image = context.getImageData(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+        const data = image.data;
+        let hot = 0;
+        let cyan = 0;
+        let sum = 0;
+        const pixels = data.length / 4;
+        for (let i = 0; i < data.length; i += 4) {
+          const red = data[i] ?? 0;
+          const green = data[i + 1] ?? 0;
+          const blue = data[i + 2] ?? 0;
+          const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+          sum += luma;
+          if (luma > 170) hot += 1;
+          if (green > 140 && blue > 160 && blue > red + 15) cyan += 1;
+        }
+        const sim = canvas.fragSim;
+        return {
+          hot,
+          cyan,
+          mean: sum / pixels,
+          width: canvas.width,
+          height: canvas.height,
+          charge: sim?.charge ?? null,
+          charging: sim?.charging ?? null,
+          png: probe.toDataURL("image/png"),
+        };
+      });
+
+    const idle = await sampleGlow();
+    if (idle.error) {
+      errors.push(`charge glow idle sample: ${idle.error}`);
+      return;
+    }
+
+    // Watch from a frame callback. Two sim steps can finish the 0.45 s hold
+    // without yielding to a Playwright poll, so the poll never sees the glow.
+    const charged = await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const deadline = performance.now() + 8000;
+          window.dispatchEvent(
+            new MouseEvent("mousedown", { button: 2, buttons: 2, bubbles: true, cancelable: true }),
+          );
+          const step = () => {
+            const canvas = document.querySelector("canvas");
+            const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+            const ready = !!sim && sim.charging === true && sim.charge >= 0.12 && sim.charge < 0.95;
+            if (!ready) {
+              if (performance.now() > deadline) resolve(null);
+              else requestAnimationFrame(step);
+              return;
+            }
+            const probe = document.createElement("canvas");
+            const width = Math.max(1, Math.floor(canvas.width / 2));
+            const height = Math.max(1, Math.floor(canvas.height / 2));
+            probe.width = width;
+            probe.height = height;
+            const context = probe.getContext("2d", { willReadFrequently: true });
+            if (!context) {
+              resolve({ error: "2d context missing" });
+              return;
+            }
+            context.drawImage(canvas, 0, 0, width, height);
+            const x0 = Math.floor(width * 0.42);
+            const x1 = Math.floor(width * 0.78);
+            const y0 = Math.floor(height * 0.42);
+            const y1 = Math.floor(height * 0.86);
+            const image = context.getImageData(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+            const data = image.data;
+            let hot = 0;
+            let cyan = 0;
+            let sum = 0;
+            const pixels = data.length / 4;
+            for (let i = 0; i < data.length; i += 4) {
+              const red = data[i] ?? 0;
+              const green = data[i + 1] ?? 0;
+              const blue = data[i + 2] ?? 0;
+              const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+              sum += luma;
+              if (luma > 170) hot += 1;
+              if (green > 140 && blue > 160 && blue > red + 15) cyan += 1;
+            }
+            resolve({
+              hot,
+              cyan,
+              mean: sum / pixels,
+              width,
+              height,
+              charge: sim.charge,
+              charging: sim.charging,
+              png: probe.toDataURL("image/png"),
+            });
+          };
+          requestAnimationFrame(step);
+        }),
+    );
+    if (!charged || charged.error) {
+      const stuck = await page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+        return {
+          phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+          hidden: document.hidden,
+          visibility: document.visibilityState,
+          hp: document.querySelector("#hud-hp")?.textContent ?? "",
+          sim: sim?.sim ?? null,
+          charge: sim?.charge ?? null,
+          charging: sim?.charging ?? null,
+          mag: sim?.mag ?? null,
+        };
+      }).catch(() => null);
+      errors.push(`charge glow did not reach a visible mid-charge ${JSON.stringify(stuck)}`);
+      errors.push(`charge glow sample: ${charged?.error ?? "missing mid-charge frame"}`);
+      return;
+    }
+    const captures = [];
+    const tmp = "/tmp/quill-charge-glow.png";
+    if (writePng(charged.png, tmp)) captures.push(tmp);
+    const artifacts = "/opt/cursor/artifacts";
+    if (fs.existsSync(artifacts)) {
+      const saved = path.join(artifacts, "quill-charge-glow.png");
+      if (writePng(charged.png, saved)) captures.push(saved);
+    }
+    const brighter = charged.cyan > idle.cyan + 20 || charged.hot > idle.hot + 20 || charged.mean > idle.mean + 4;
+    console.log(
+      `charge glow mid ${charged.charge} charging ${charged.charging}: cyan ${idle.cyan}->${charged.cyan}, hot ${idle.hot}->${charged.hot}, mean ${idle.mean.toFixed(2)}->${charged.mean.toFixed(2)}, capture ${captures.join(", ") || "unsaved"}`,
+    );
+    if (!brighter) {
+      errors.push(
+        `charge glow not visible (cyan ${idle.cyan}->${charged.cyan}, hot ${idle.hot}->${charged.hot}, mean ${idle.mean.toFixed(2)}->${charged.mean.toFixed(2)})`,
+      );
+    }
+    if (captures.length === 0) errors.push("charge glow capture was not written");
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    errors.push(`charge glow probe failed: ${message}`);
+  } finally {
+    await page.evaluate(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { button: 2, buttons: 0, bubbles: true, cancelable: true }));
+    }).catch(() => {});
+    await page.close();
+  }
+}
+
 async function sampleOptInFrame(browser, errors) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   noteConsole(page, errors, "pixels");
@@ -2370,13 +2576,18 @@ try {
     });
     if (stats.error) errors.push(stats.error);
     else {
+      console.log(
+        `normal checkpoint draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}`,
+      );
       if (!(stats.triangles > 0 && stats.triangles <= 50_000)) {
         errors.push(`renderer triangles ${stats.triangles} outside 1..50000`);
       }
-      if (!(stats.calls > 0 && stats.calls <= 80)) {
-        errors.push(`renderer draw calls ${stats.calls} outside 1..80`);
+      if (!(stats.calls > 0 && stats.calls <= 33)) {
+        errors.push(`renderer draw calls ${stats.calls} outside 1..33`);
       }
     }
+
+    await assertChargeGlow(browser, errors);
 
     // No page.screenshot here. On software GL the bloom frame occupies the
     // compositor, and Playwright's capture waits for that frame until it times out.

@@ -5,6 +5,11 @@ import { createHitboxWorld, registerHitbox } from "../src/hitbox.ts";
 import { hudReadout } from "../src/hud/model.ts";
 import { createPlayerState } from "../src/player/state.ts";
 import {
+  QUILL_BURST,
+  QUILL_BURST_COST,
+  QUILL_BURST_COOLDOWN,
+  QUILL_CHARGE,
+  QUILL_CHARGE_ABORT,
   QUILL_DAMAGE,
   QUILL_INTERVAL,
   QUILL_MAG,
@@ -693,4 +698,193 @@ test("held fire stays at 8.000 shots/s at 5, 30, and 120 fps", () => {
     console.log(`held quill ${fps} fps: ${rate.toFixed(3)} shots/s over ${span.toFixed(5)} s`);
     assert.ok(Math.abs(rate - 8) < 1e-9, `${fps} fps rate ${rate}`);
   }
+});
+
+function holdAlt(fire = false, presses = 0, reload = false) {
+  return { fire, presses, reload, alt: true, origin, direction: forward };
+}
+
+function releaseAlt() {
+  return { fire: false, presses: 0, reload: false, alt: false, origin, direction: forward };
+}
+
+test("charged pierce burst damages two lined-up enemies and stops at the third", () => {
+  const world = createHitboxWorld();
+  const dealt = [0, 0, 0];
+  const ranges = [-8, -12, -16];
+  for (let i = 0; i < ranges.length; i += 1) {
+    const index = i;
+    world.register({
+      center: { x: 0, y: 0, z: ranges[i] },
+      radius: 0.3,
+      onHit(damage) {
+        dealt[index] += damage;
+      },
+    });
+  }
+  const events = [];
+  const quill = createQuill({ hitboxes: world, onEvent: (event) => events.push(event.type) });
+  const before = spineFromMagazine(1);
+  quill.update(QUILL_CHARGE - 0.02, holdAlt());
+  assert.equal(quill.shotsFired, 0, "the burst fired before the charge finished");
+  assert.ok(quill.charging, "the hold did not charge");
+  assert.ok(quill.charge > 0.9 && quill.charge < 1, `mid-late charge ${quill.charge}`);
+  quill.update(0.02, holdAlt());
+  assert.equal(quill.shotsFired, QUILL_BURST);
+  assert.equal(quill.mag, QUILL_MAG - QUILL_BURST_COST);
+  assert.equal(quill.charging, false);
+  assert.equal(quill.charge, 0);
+  const after = spineFromMagazine(quill.mag / QUILL_MAG);
+  assert.ok(
+    Math.abs(before.length - after.length - (QUILL_BURST_COST / QUILL_MAG) * SPINE_FULL_LENGTH) < 1e-9,
+    `spine dropped ${before.length - after.length}, expected 5 rounds`,
+  );
+  quill.update(0.45, releaseAlt());
+  assert.equal(dealt[0], QUILL_BURST * QUILL_DAMAGE, `front enemy took ${dealt[0]}`);
+  assert.equal(dealt[1], QUILL_BURST * QUILL_DAMAGE, `enemy behind took ${dealt[1]}`);
+  assert.equal(dealt[2], 0, `a third enemy was pierced, took ${dealt[2]}`);
+  assert.ok(events.includes("quill-charge"));
+  assert.ok(events.includes("quill-charge-end"));
+  assert.equal(
+    events.filter((type) => type === "quill-shot").length,
+    QUILL_BURST,
+  );
+  assert.equal(quill.liveCount, 0);
+});
+
+test("a charged flechette does not pierce a hull to the enemy behind it", () => {
+  const hull = {
+    boxes: [{ min: { x: -2, y: -2, z: -10.02 }, max: { x: 2, y: 2, z: -10 } }],
+    ramps: [],
+  };
+  const world = createHitboxWorld();
+  let front = 0;
+  let behind = 0;
+  world.register({
+    center: { x: 0, y: 0, z: -8 },
+    radius: 0.3,
+    onHit(damage) {
+      front += damage;
+    },
+  });
+  world.register({
+    center: { x: 0, y: 0, z: -12 },
+    radius: 0.3,
+    onHit(damage) {
+      behind += damage;
+    },
+  });
+  const quill = createQuill({ hull, hitboxes: world });
+  quill.update(QUILL_CHARGE, holdAlt());
+  quill.update(0.4, releaseAlt());
+  assert.equal(front, QUILL_BURST * QUILL_DAMAGE);
+  assert.equal(behind, 0);
+});
+
+test("alt-fire refuses a short magazine, a reload, an early release, and the cooldown", () => {
+  const dt = 1 / 120;
+  const lowEvents = [];
+  const lowHeard = createQuill({
+    hitboxes: createHitboxWorld(),
+    onEvent: (event) => lowEvents.push(event.type),
+  });
+  while (lowHeard.mag > 4) lowHeard.update(QUILL_INTERVAL, paced(true, 0));
+  assert.equal(lowHeard.mag, 4);
+  const beforeAlt = lowHeard.shotsFired;
+  lowEvents.length = 0;
+  lowHeard.update(0.05, holdAlt());
+  assert.equal(lowHeard.shotsFired, beforeAlt, "four rounds fired a burst");
+  assert.equal(lowHeard.mag, 4);
+  assert.equal(lowHeard.charging, false);
+  assert.ok(lowHeard.chargeAbort > 0.5, `empty abort ${lowHeard.chargeAbort}`);
+  assert.deepEqual(lowEvents, ["quill-charge-abort"]);
+  lowHeard.update(QUILL_CHARGE_ABORT, releaseAlt());
+  assert.equal(lowHeard.chargeAbort, 0);
+
+  const quill = fresh();
+  for (let i = 0; i < 10; i += 1) {
+    quill.update(0, command(true, false));
+    quill.update(0, command(false, false));
+  }
+  assert.equal(quill.mag, 30);
+  quill.update(0, { ...releaseAlt(), reload: true });
+  assert.equal(quill.reloading, true);
+  const during = quill.shotsFired;
+  const mag = quill.mag;
+  quill.update(0.5, holdAlt());
+  assert.equal(quill.reloading, true);
+  assert.equal(quill.shotsFired, during, "alt-fire shot during reload");
+  assert.equal(quill.mag, mag);
+  assert.equal(quill.charging, false);
+  quill.update(QUILL_RELOAD - 0.5, releaseAlt());
+  assert.equal(quill.reloading, false);
+  assert.equal(quill.mag, QUILL_MAG);
+  assert.equal(quill.reserve, 30);
+
+  const early = fresh();
+  early.update(0.2, holdAlt());
+  assert.ok(early.charging);
+  assert.ok(Math.abs(early.charge - 0.2 / QUILL_CHARGE) < 0.02, `charge ${early.charge}`);
+  early.update(dt, releaseAlt());
+  assert.equal(early.charging, false);
+  assert.equal(early.shotsFired, 0);
+  assert.equal(early.mag, QUILL_MAG);
+  assert.ok(early.chargeAbort > 0.5);
+  early.update(dt, holdAlt());
+  assert.equal(early.charging, true, "an abort started the cooldown");
+
+  const burst = fresh();
+  burst.update(QUILL_CHARGE, holdAlt());
+  assert.equal(burst.shotsFired, QUILL_BURST);
+  assert.equal(burst.mag, QUILL_MAG - QUILL_BURST_COST);
+  burst.update(0.2, releaseAlt());
+  burst.update(dt, holdAlt());
+  assert.equal(burst.charging, false, "cooldown ignored a new press");
+  assert.equal(burst.shotsFired, QUILL_BURST);
+  burst.update(0, releaseAlt());
+  burst.update(QUILL_BURST_COOLDOWN - 0.2, releaseAlt());
+  burst.update(dt, holdAlt());
+  assert.equal(burst.charging, true, "cooldown did not end");
+  let guard = 0;
+  while (burst.charging && guard < 200) {
+    burst.update(dt, holdAlt());
+    guard += 1;
+  }
+  assert.equal(burst.shotsFired, QUILL_BURST * 2);
+  assert.equal(burst.mag, QUILL_MAG - QUILL_BURST_COST * 2);
+  assert.ok(guard * dt + dt >= QUILL_CHARGE - 0.02, `second charge finished in ${guard * dt} s`);
+
+  const drained = fresh();
+  while (drained.mag > 6) drained.update(QUILL_INTERVAL, paced(true, 0));
+  assert.equal(drained.mag, 6);
+  drained.update(0.05, holdAlt());
+  assert.equal(drained.charging, true);
+  drained.update(QUILL_INTERVAL, holdAlt(true, 0));
+  assert.equal(drained.mag, 5);
+  assert.equal(drained.charging, true, "five rounds aborted a live charge");
+  drained.update(QUILL_INTERVAL, holdAlt(true, 0));
+  assert.equal(drained.mag, 4);
+  drained.update(dt, holdAlt());
+  assert.equal(drained.charging, false);
+  assert.ok(drained.chargeAbort > 0);
+  assert.equal(drained.shotsFired, QUILL_MAG - 4, "the abort spent a burst");
+});
+
+test("left-click full-auto stays at 8 shots/s when alt-fire is unused", () => {
+  const dt = 1 / 120;
+  const plain = fresh();
+  const pacedOnly = fresh();
+  let time = 0;
+  while (time < 1 - 1e-9) {
+    plain.update(dt, command(true, false));
+    pacedOnly.update(dt, paced(true, 0));
+    time += dt;
+  }
+  assert.equal(pacedOnly.shotsFired, plain.shotsFired);
+  assert.equal(pacedOnly.mag, QUILL_MAG - pacedOnly.shotsFired);
+  const span = pacedOnly.shotTime(pacedOnly.shotsFired - 1) - pacedOnly.shotTime(0);
+  const rate = (pacedOnly.shotsFired - 1) / span;
+  assert.ok(Math.abs(rate - 8) < 1e-6, `primary rate ${rate}`);
+  assert.ok(Math.abs(span - 1) < dt, `primary span ${span}`);
+  assert.equal(pacedOnly.charging, false);
 });

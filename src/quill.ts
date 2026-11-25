@@ -13,6 +13,13 @@
 // trigger does nothing while it runs. An empty hold with no reserve left
 // does not fire and does not advance the shot clock.
 //
+// Right mouse charges a pierce burst. The charge takes 0.45 s and then fires
+// three flechettes down the same bore. Those three cost 5 magazine rounds.
+// Each deals 9 and can pass through the first enemy to hit the one behind it.
+// A second charge waits out a 0.8 s cooldown. Letting go early, or dropping
+// under 5 rounds while the charge is running, aborts it. Reload, and a
+// magazine under 5, will not fire the burst. Left-click stays at eight a second.
+//
 // The shot clock is an accumulator, so a 20 fps frame and a 144 fps frame
 // land on the same pulses. Spikes live in a fixed pool. Past the cap, the
 // oldest slot is reused. The 0.12° pitch punch is a view offset: it settles
@@ -41,6 +48,18 @@ export const QUILL_RESERVE_START = 40;
 export const QUILL_RELOAD = 1.4;
 export const QUILL_POOL_CAP = 16;
 export const QUILL_FLASH_SECONDS = 0.045;
+/** Right-click hold before the pierce burst fires. */
+export const QUILL_CHARGE = 0.45;
+/** Flechettes in the charged burst. Each deals QUILL_DAMAGE. */
+export const QUILL_BURST = 3;
+/** Magazine rounds the burst spends. The spine lamp shortens by this many. */
+export const QUILL_BURST_COST = 5;
+/** Seconds after a burst before another charge can start. */
+export const QUILL_BURST_COOLDOWN = 0.8;
+/** How long the abort flash stays up, in seconds. */
+export const QUILL_CHARGE_ABORT = 0.12;
+/** Enemies a burst flechette may pass through before the next hit stops it. */
+export const QUILL_PIERCE = 1;
 /** Muzzle, meters forward of the eye along the bore. */
 export const MUZZLE_FORWARD = 0.45;
 
@@ -58,6 +77,15 @@ export interface FlechetteSlot {
   age: number;
   traveled: number;
   serial: number;
+  /** Enemies this spike can still pass through. Primary shots stay at 0. */
+  pierce: number;
+  /** Enemy already damaged. The next sweep skips that callback. */
+  passed: ((damage: number) => void) | null;
+  /**
+   * Seconds to wait before this spike starts moving. A burst born partway
+   * through a frame uses this so it does not fly the whole slice.
+   */
+  delay: number;
 }
 
 export interface QuillCommand {
@@ -71,6 +99,13 @@ export interface QuillCommand {
   presses?: number;
   /** Rising edge of reload. Held frames after the edge are ignored. */
   reload: boolean;
+  /** Right mouse held. Omitted does not charge. */
+  alt?: boolean;
+  /**
+   * Right-click down edge since the previous sample. A tap that is already
+   * up still counts, and that one aborts instead of firing.
+   */
+  altEdge?: boolean;
   origin: Vec3;
   direction: Vec3;
 }
@@ -96,6 +131,12 @@ export interface QuillDriver {
   readonly kick: number;
   /** 1 at the muzzle flash, falling to 0. */
   readonly flash: number;
+  /** 0 at rest, 1 when the right-click charge is full. */
+  readonly charge: number;
+  /** True while right mouse is charging the burst. */
+  readonly charging: boolean;
+  /** 1 when a charge aborts, falling to 0 over QUILL_CHARGE_ABORT. */
+  readonly chargeAbort: number;
   readonly shotsFired: number;
   readonly poolCap: number;
   readonly poolSize: number;
@@ -169,13 +210,21 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
   let flash = 0;
   let publishedMag = mag;
   let publishedReserve = reserve;
+  let charging = false;
+  let chargeTime = 0;
+  let altHeld = false;
+  let cooldown = 0;
+  let abortLeft = 0;
+  // A burst can open a reload after part of the frame has already passed.
+  // -1 means the reload branch should count the whole dt.
+  let reloadSlice = -1;
 
-  function shoot(command: QuillCommand, time: number): boolean {
+  function fillSlot(command: QuillCommand, time: number, pierce: number, delay: number): boolean {
     const dx = command.direction.x;
     const dy = command.direction.y;
     const dz = command.direction.z;
     const len = Math.hypot(dx, dy, dz);
-    if (!(len > 1e-8) || mag <= 0) return false;
+    if (!(len > 1e-8)) return false;
 
     let slot: FlechetteSlot | null = null;
     let oldest: FlechetteSlot | null = null;
@@ -201,8 +250,10 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     slot.age = 0;
     slot.traveled = 0;
     slot.serial = birth + 1;
+    slot.pierce = pierce;
+    slot.passed = null;
+    slot.delay = delay;
     birth += 1;
-    mag -= 1;
     shotsFired += 1;
     if (recorded < RECORD) {
       shotTimes[recorded] = time;
@@ -212,6 +263,13 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
       dir.z = slot.dz;
       recorded += 1;
     }
+    return true;
+  }
+
+  function shoot(command: QuillCommand, time: number): boolean {
+    if (mag <= 0) return false;
+    if (!fillSlot(command, time, 0, 0)) return false;
+    mag -= 1;
     punch = QUILL_PUNCH_DEG;
     punchAge = 0;
     flash = 1;
@@ -220,10 +278,95 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     return true;
   }
 
+  function launchBurst(command: QuillCommand, time: number, delay: number, overshoot: number): boolean {
+    if (mag < QUILL_BURST_COST) return false;
+    const dx = command.direction.x;
+    const dy = command.direction.y;
+    const dz = command.direction.z;
+    if (!(Math.hypot(dx, dy, dz) > 1e-8)) return false;
+    let spawned = 0;
+    for (let i = 0; i < QUILL_BURST; i += 1) {
+      if (fillSlot(command, time, QUILL_PIERCE, delay)) spawned += 1;
+    }
+    if (spawned === 0) return false;
+    mag -= QUILL_BURST_COST;
+    if (mag < 0) mag = 0;
+    punch = QUILL_PUNCH_DEG;
+    punchAge = 0;
+    flash = 1;
+    cooldown = QUILL_BURST_COOLDOWN;
+    if (mag <= 0 && reserve > 0) {
+      tryStartReload();
+      reloadSlice = Math.max(0, overshoot);
+    }
+    options.onEvent?.({ type: "quill-charge-end" });
+    for (let i = 0; i < spawned; i += 1) options.onEvent?.({ type: "quill-shot" });
+    return true;
+  }
+
+  function abortCharge(): void {
+    charging = false;
+    chargeTime = 0;
+    abortLeft = QUILL_CHARGE_ABORT;
+    options.onEvent?.({ type: "quill-charge-abort" });
+  }
+
+  function stepAlt(dt: number, command: QuillCommand): void {
+    if (dt > 0) {
+      if (abortLeft > 0) {
+        abortLeft -= dt;
+        if (abortLeft < 0) abortLeft = 0;
+      }
+      if (cooldown > 0) {
+        cooldown -= dt;
+        if (cooldown < 0) cooldown = 0;
+      }
+    }
+
+    const altDown = command.alt === true;
+    const edge = command.altEdge === true || (altDown && !altHeld);
+    altHeld = altDown;
+
+    if (reloading) {
+      if (charging) abortCharge();
+      return;
+    }
+
+    // A click that is already up never held long enough to charge.
+    if (edge && !altDown && !charging && cooldown <= 0) {
+      abortCharge();
+      return;
+    }
+
+    if (mag < QUILL_BURST_COST) {
+      if (charging || (edge && cooldown <= 0)) abortCharge();
+      return;
+    }
+
+    if (!charging) {
+      if (!(edge && altDown && cooldown <= 0)) return;
+      charging = true;
+      chargeTime = 0;
+      options.onEvent?.({ type: "quill-charge" });
+    } else if (!altDown) {
+      abortCharge();
+      return;
+    }
+
+    chargeTime += dt;
+    if (chargeTime < QUILL_CHARGE - 1e-9) return;
+    const overshoot = Math.max(0, chargeTime - QUILL_CHARGE);
+    const delay = Math.max(0, dt - overshoot);
+    charging = false;
+    chargeTime = 0;
+    if (!launchBurst(command, clock + delay, delay, overshoot)) abortCharge();
+  }
+
   function tryStartReload(): void {
     if (reloading || mag >= QUILL_MAG || reserve <= 0) return;
     reloading = true;
     reloadTimer = 0;
+    reloadSlice = -1;
     options.onEvent?.({ type: "reload-start" });
   }
 
@@ -295,9 +438,12 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
       if (!Number.isFinite(dt) || dt < 0) dt = 0;
       if (command.reload) tryStartReload();
       if (!reloading && mag <= 0 && reserve > 0) tryStartReload();
+      stepAlt(dt, command);
 
       if (reloading) {
-        reloadTimer += dt;
+        const slice = reloadSlice >= 0 ? reloadSlice : dt;
+        reloadSlice = -1;
+        reloadTimer += slice;
         if (reloadTimer >= QUILL_RELOAD) finishReload();
         settle(dt);
         carry = QUILL_INTERVAL;
@@ -422,6 +568,21 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     get flash() {
       return flash;
     },
+    get charge() {
+      if (!charging) return 0;
+      const t = chargeTime / QUILL_CHARGE;
+      if (t <= 0) return 0;
+      if (t >= 1) return 1;
+      return t;
+    },
+    get charging() {
+      return charging;
+    },
+    get chargeAbort() {
+      if (!(abortLeft > 0)) return 0;
+      const t = abortLeft / QUILL_CHARGE_ABORT;
+      return t > 1 ? 1 : t;
+    },
     get shotsFired() {
       return shotsFired;
     },
@@ -460,16 +621,29 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
       return gain;
     },
     reset(): void {
+      if (charging) options.onEvent?.({ type: "quill-charge-end" });
       mag = QUILL_MAG;
       reserve = QUILL_RESERVE_START;
       reloading = false;
       reloadTimer = 0;
+      reloadSlice = -1;
       carry = QUILL_INTERVAL;
       triggerHeld = false;
+      charging = false;
+      chargeTime = 0;
+      altHeld = false;
+      cooldown = 0;
+      abortLeft = 0;
       punch = 0;
       punchAge = QUILL_PUNCH_RECOVER;
       flash = 0;
-      for (let i = 0; i < pool.length; i += 1) pool[i]!.alive = false;
+      for (let i = 0; i < pool.length; i += 1) {
+        const slot = pool[i]!;
+        slot.alive = false;
+        slot.passed = null;
+        slot.pierce = 0;
+        slot.delay = 0;
+      }
       publishedMag = -1;
       publishedReserve = -1;
       publish();
@@ -477,63 +651,103 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
   };
 }
 
+function endSlot(slot: FlechetteSlot): void {
+  slot.alive = false;
+  slot.passed = null;
+  slot.pierce = 0;
+  slot.delay = 0;
+}
+
 function stepSlot(slot: FlechetteSlot, dt: number): void {
+  if (slot.delay > 0) {
+    const skip = dt < slot.delay ? dt : slot.delay;
+    slot.delay -= skip;
+    dt -= skip;
+    if (!(dt > 1e-8)) return;
+  }
   const timeLeft = QUILL_LIFETIME - slot.age;
   const distLeft = QUILL_RANGE - slot.traveled;
   if (timeLeft <= 1e-8 || distLeft <= 1e-6) {
-    slot.alive = false;
+    endSlot(slot);
     return;
   }
   const stepTime = dt < timeLeft ? dt : timeLeft;
   const want = QUILL_SPEED * stepTime;
-  const dist = want < distLeft ? want : distLeft;
-  if (!(dist > 0)) {
-    slot.alive = false;
+  let remain = want < distLeft ? want : distLeft;
+  if (!(remain > 0)) {
+    endSlot(slot);
     return;
   }
 
-  from.x = slot.x;
-  from.y = slot.y;
-  from.z = slot.z;
-  to.x = slot.x + slot.dx * dist;
-  to.y = slot.y + slot.dy * dist;
-  to.z = slot.z + slot.dz * dist;
-
-  let hitT = 1;
-  let blocked = false;
-  let hit: ((damage: number) => void) | null = null;
   const driverHull = activeHull;
-  if (driverHull) {
-    const world = traceSegment(from, to, driverHull, worldScratch);
-    if (world && world.t <= hitT) {
-      hitT = world.t;
-      blocked = true;
-    }
-  }
   const driverTargets = activeTargets;
-  if (driverTargets.sweep(from, to, QUILL_RADIUS, sweepScratch) && sweepScratch.t <= hitT) {
-    hitT = sweepScratch.t;
-    blocked = true;
-    hit = sweepScratch.onHit;
-  }
+  // One pass, plus another for each enemy this spike is still allowed to pierce.
+  let guard = 0;
+  while (remain > 1e-6 && guard < 4) {
+    guard += 1;
+    from.x = slot.x;
+    from.y = slot.y;
+    from.z = slot.z;
+    to.x = slot.x + slot.dx * remain;
+    to.y = slot.y + slot.dy * remain;
+    to.z = slot.z + slot.dz * remain;
 
-  const used = dist * hitT;
-  slot.x += slot.dx * used;
-  slot.y += slot.dy * used;
-  slot.z += slot.dz * used;
-  slot.traveled += used;
-  slot.age += used / QUILL_SPEED;
+    let hitT = 1;
+    let blocked = false;
+    let hit: ((damage: number) => void) | null = null;
+    if (driverHull) {
+      const world = traceSegment(from, to, driverHull, worldScratch);
+      if (world && world.t <= hitT) {
+        hitT = world.t;
+        blocked = true;
+      }
+    }
+    if (driverTargets.sweep(from, to, QUILL_RADIUS, sweepScratch, slot.passed) && sweepScratch.t <= hitT) {
+      hitT = sweepScratch.t;
+      blocked = true;
+      hit = sweepScratch.onHit;
+    }
 
-  if (hit) hit(QUILL_DAMAGE);
-  // Open sky is not a hull. A spike that leaves the atrium is spent.
-  const outside =
-    driverHull !== null &&
-    (Math.abs(slot.x) > MAP_HALF ||
-      Math.abs(slot.z) > MAP_HALF ||
-      slot.y < KILL_Y ||
-      slot.y > CEILING_Y);
-  if (hit || blocked || outside || slot.age >= QUILL_LIFETIME - 1e-8 || slot.traveled >= QUILL_RANGE - 1e-4) {
-    slot.alive = false;
+    const used = remain * hitT;
+    slot.x += slot.dx * used;
+    slot.y += slot.dy * used;
+    slot.z += slot.dz * used;
+    slot.traveled += used;
+    slot.age += used / QUILL_SPEED;
+    remain -= used;
+
+    if (hit) {
+      hit(QUILL_DAMAGE);
+      if (slot.pierce > 0) {
+        slot.pierce -= 1;
+        slot.passed = hit;
+        const nudge = remain > 0.001 ? 0.001 : 0;
+        if (nudge > 0) {
+          slot.x += slot.dx * nudge;
+          slot.y += slot.dy * nudge;
+          slot.z += slot.dz * nudge;
+          slot.traveled += nudge;
+          slot.age += nudge / QUILL_SPEED;
+          remain -= nudge;
+        }
+        continue;
+      }
+      endSlot(slot);
+      return;
+    }
+
+    // Open sky is not a hull. A spike that leaves the atrium is spent.
+    const outside =
+      driverHull !== null &&
+      (Math.abs(slot.x) > MAP_HALF ||
+        Math.abs(slot.z) > MAP_HALF ||
+        slot.y < KILL_Y ||
+        slot.y > CEILING_Y);
+    if (blocked || outside || slot.age >= QUILL_LIFETIME - 1e-8 || slot.traveled >= QUILL_RANGE - 1e-4) {
+      endSlot(slot);
+      return;
+    }
+    break;
   }
 }
 
@@ -554,6 +768,9 @@ function createSlot(): FlechetteSlot {
     age: 0,
     traveled: 0,
     serial: 0,
+    pierce: 0,
+    passed: null,
+    delay: 0,
   };
 }
 

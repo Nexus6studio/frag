@@ -19,6 +19,9 @@ import { WISP_TELEGRAPH, WISP_WAVE1_SPAWN_GRACE, createWispSim } from "../src/wi
 const EVENTS = [
   { type: "quill-shot" },
   { type: "quill-dry" },
+  { type: "quill-charge" },
+  { type: "quill-charge-end" },
+  { type: "quill-charge-abort" },
   { type: "reload-start" },
   { type: "reload-end" },
   { type: "enemy-hit" },
@@ -98,6 +101,9 @@ test("each sim event maps to its own cue", () => {
   assert.deepEqual(cues, [
     "flechette",
     "dry",
+    "charge",
+    "charge-end",
+    "charge-abort",
     "reload-slide",
     "reload-lock",
     "hit",
@@ -595,6 +601,44 @@ test("the low-HP heartbeat is a soft lub-dub under 180 Hz with no tone", () => {
   // White noise through a 160 Hz lowpass is quiet, so the lub peak sits above 1.
   assert.ok(peaks[0] >= 1.5 && peaks[0] <= 3);
   assert.ok(peaks[1] >= 0.8 && peaks[1] < peaks[0]);
+});
+
+test("the quill charge hum rises under 900 Hz through the 1200 Hz lowpass", () => {
+  const heard = listen();
+  heard.audio.play("charge");
+  assert.equal(heard.osc.length, 1);
+  const node = heard.osc[0];
+  assert.equal(node.type, "sawtooth");
+  assert.equal(node.stopCount, 0);
+  const from = node.frequency.events.find((event) => event.op === "set");
+  const to = node.frequency.events.find((event) => event.op === "expo");
+  assert.ok(from && to);
+  assert.ok(to.value > from.value, `hum ${from.value} did not rise to ${to.value}`);
+  assert.ok(from.value > 0 && from.value <= 900, `hum start ${from.value}`);
+  assert.ok(to.value <= 900, `hum peak ${to.value}`);
+  assert.ok(Math.abs(to.time - from.time - 0.45) < 1e-6, "hum does not follow the 0.45 s charge");
+  const toneFilter = heard.filters.find((filter) => filter.type === "lowpass");
+  assert.ok(toneFilter);
+  assert.equal(toneFilter.frequency.value, 1200);
+  assert.ok(toneFilter.Q.value <= 0.7);
+  for (const event of toneFilter.frequency.events) {
+    assert.ok(event.value <= 1200, `lowpass opened to ${event.value}`);
+  }
+  heard.audio.play("charge-abort");
+  assert.ok(node.stopCount > 0, "the abort left the hum running");
+  assert.equal(heard.osc.length, 2);
+  const blip = heard.osc[1];
+  const blipFrom = blip.frequency.events.find((event) => event.op === "set");
+  const blipTo = blip.frequency.events.find((event) => event.op === "expo");
+  assert.ok(blipFrom && blipTo);
+  assert.ok(blipTo.value < blipFrom.value);
+  assert.ok(blipFrom.value <= 900 && blipTo.value <= 900);
+
+  const ended = listen();
+  ended.audio.play("charge");
+  ended.audio.play("charge-end");
+  assert.equal(ended.osc.length, 1);
+  assert.ok(ended.osc[0].stopCount > 0, "firing the burst left the hum running");
 });
 
 test("the quill reports a shot, the reload, and a dry click", () => {

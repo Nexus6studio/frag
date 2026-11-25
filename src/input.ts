@@ -19,6 +19,7 @@ export const ACTIONS = [
   "right",
   "jump",
   "fire",
+  "alt",
   "reload",
   "pause",
   "debug",
@@ -72,6 +73,7 @@ export function buttonState(): ButtonState {
     right: false,
     jump: false,
     fire: false,
+    alt: false,
     reload: false,
     pause: false,
     debug: false,
@@ -80,14 +82,15 @@ export function buttonState(): ButtonState {
   };
 }
 
-export function buttonsFromCodes(codes: Iterable<string>, fire: boolean): ButtonState {
+export function buttonsFromCodes(codes: Iterable<string>, fire: boolean, alt = false): ButtonState {
   const down = buttonState();
   for (const code of codes) {
     const action = KEY_ACTIONS[code];
     if (action) down[action] = true;
   }
-  // Left mouse is not a key. Held is the full-auto fire intent.
+  // Left mouse is full-auto. Right mouse charges the pierce burst.
   down.fire = fire;
+  down.alt = alt;
   return down;
 }
 
@@ -179,6 +182,7 @@ export function createInput(
 } {
   const held = new Set<string>();
   let fire = false;
+  let alt = false;
   let firePresses = 0;
   let lookX = 0;
   let lookY = 0;
@@ -191,7 +195,7 @@ export function createInput(
   }
 
   function physical(): ButtonState {
-    return buttonsFromCodes(held, fire);
+    return buttonsFromCodes(held, fire, alt);
   }
 
   function sync(): void {
@@ -228,7 +232,17 @@ export function createInput(
     return shell.getAttribute("data-phase") === "playing";
   }
 
+  function onContextMenu(event: Event): void {
+    event.preventDefault();
+  }
+
   function onMouseDown(event: MouseEvent): void {
+    if (event.button === 2) {
+      alt = true;
+      event.preventDefault();
+      sync();
+      return;
+    }
     if (event.button !== 0) return;
     fire = true;
     // One mousedown is one press. Pause and the warning are not play, so the
@@ -243,6 +257,11 @@ export function createInput(
   Object.assign(onMouseDown, { fragRole: "fire" });
 
   function onMouseUp(event: MouseEvent): void {
+    if (event.button === 2) {
+      alt = false;
+      sync();
+      return;
+    }
     if (event.button !== 0) return;
     fire = false;
     sync();
@@ -259,6 +278,7 @@ export function createInput(
     // A missed keyup (alt-tab) would otherwise stick a button on.
     held.clear();
     fire = false;
+    alt = false;
     disarm();
   }
 
@@ -271,6 +291,10 @@ export function createInput(
     armed = true;
   }
 
+  // Headless input tests pass a plain object. The page canvas always has this.
+  if (typeof canvas.addEventListener === "function") {
+    canvas.addEventListener("contextmenu", onContextMenu);
+  }
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("mousedown", onMouseDown);

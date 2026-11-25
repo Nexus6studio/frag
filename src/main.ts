@@ -216,7 +216,15 @@ pauseSettings = mountPauseSettings(settings, (next) => {
 });
 const aim = { x: 0, y: 0, z: -1 };
 const muzzle = { x: 0, y: 0, z: 0 };
-const quillCommand = { fire: false, presses: 0, reload: false, origin: muzzle, direction: aim };
+const quillCommand = {
+  fire: false,
+  presses: 0,
+  reload: false,
+  alt: false,
+  altEdge: false,
+  origin: muzzle,
+  direction: aim,
+};
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -354,6 +362,9 @@ Object.defineProperty(renderer.domElement, "fragSim", {
       mag: quill.mag,
       reserve: quill.reserve,
       reloading: quill.reloading,
+      charge: quill.charge,
+      charging: quill.charging,
+      chargeAbort: quill.chargeAbort,
       stall: latchedStall,
     };
   },
@@ -438,6 +449,8 @@ function frame(time: number): void {
     quillCommand.fire = controls.down.fire;
     quillCommand.presses = controls.firePresses;
     quillCommand.reload = controls.pressed.reload;
+    quillCommand.alt = controls.down.alt;
+    quillCommand.altEdge = controls.pressed.alt;
     quill.update(simDt, quillCommand);
     // Grace, bursts, and bolts run whenever play is running, even if the
     // pointer lock was rejected. The warning, click-to-play, and pause must
