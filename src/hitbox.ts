@@ -42,7 +42,17 @@ interface HitboxRecord {
 
 export interface HitboxWorld {
   register(spec: HitboxSpec): HitboxHandle;
-  sweep(from: Vec3, to: Vec3, radius: number, out: HitboxSweep): boolean;
+  /**
+   * Nearest target on the segment. `ignore` skips one callback so a flechette
+   * that already damaged an enemy can look for the one behind it.
+   */
+  sweep(
+    from: Vec3,
+    to: Vec3,
+    radius: number,
+    out: HitboxSweep,
+    ignore?: ((damage: number) => void) | null,
+  ): boolean;
 }
 
 export function createHitboxWorld(): HitboxWorld {
@@ -68,7 +78,13 @@ export function createHitboxWorld(): HitboxWorld {
         },
       };
     },
-    sweep(from: Vec3, to: Vec3, radius: number, out: HitboxSweep): boolean {
+    sweep(
+      from: Vec3,
+      to: Vec3,
+      radius: number,
+      out: HitboxSweep,
+      ignore?: ((damage: number) => void) | null,
+    ): boolean {
       const dx = to.x - from.x;
       const dy = to.y - from.y;
       const dz = to.z - from.z;
@@ -78,6 +94,7 @@ export function createHitboxWorld(): HitboxWorld {
       for (let i = 0; i < records.length; i += 1) {
         const record = records[i]!;
         if (!record.active) continue;
+        if (ignore && record.onHit === ignore) continue;
         const t = record.aabb
           ? segmentAabb(from.x, from.y, from.z, dx, dy, dz, record.aabb, radius)
           : record.radius === null

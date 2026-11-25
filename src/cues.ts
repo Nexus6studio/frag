@@ -7,6 +7,9 @@ export const LOW_HP = 25;
 export type SimEvent =
   | { type: "quill-shot" }
   | { type: "quill-dry" }
+  | { type: "quill-charge" }
+  | { type: "quill-charge-end" }
+  | { type: "quill-charge-abort" }
   | { type: "reload-start" }
   | { type: "reload-end" }
   | { type: "enemy-hit" }
@@ -20,6 +23,9 @@ export type SimEvent =
 export type CueId =
   | "flechette"
   | "dry"
+  | "charge"
+  | "charge-end"
+  | "charge-abort"
   | "reload-slide"
   | "reload-lock"
   | "hit"
@@ -40,6 +46,12 @@ export function cueFor(event: SimEvent): CueId {
       return "flechette";
     case "quill-dry":
       return "dry";
+    case "quill-charge":
+      return "charge";
+    case "quill-charge-end":
+      return "charge-end";
+    case "quill-charge-abort":
+      return "charge-abort";
     case "reload-start":
       return "reload-slide";
     case "reload-end":

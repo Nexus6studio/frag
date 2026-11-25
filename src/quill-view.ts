@@ -134,9 +134,23 @@ export function mountQuillView(
       anchor.rotation.x = pose.pitch;
       anchor.rotation.y = 0;
       anchor.rotation.z = pose.roll;
+      // The charge glow reuses the muzzle flash, so a quiet frame does not
+      // gain a draw. It stays hidden until the right mouse is charging.
+      const charging = driver.charge > 0.02;
+      const aborting = !charging && driver.chargeAbort > 0.02 && driver.flash <= 0.02;
       const flashing = driver.flash > 0.02;
-      flash.visible = flashing;
-      if (flashing) {
+      flash.visible = charging || aborting || flashing;
+      if (charging) {
+        flashMaterial.color.setHex(0xffffff);
+        const scale = 0.55 + driver.charge * 2.1;
+        flash.scale.set(scale, scale, scale * 1.6);
+        flashMaterial.opacity = 0.28 + driver.charge * 0.72;
+      } else if (aborting) {
+        flashMaterial.color.setHex(0xff7a3c);
+        flash.scale.set(0.85, 0.85, 0.7);
+        flashMaterial.opacity = driver.chargeAbort * 0.9;
+      } else if (flashing) {
+        flashMaterial.color.setHex(0xffffff);
         const scale = 0.65 + driver.flash;
         flash.scale.set(scale, scale, scale * 1.4);
         flashMaterial.opacity = driver.flash;

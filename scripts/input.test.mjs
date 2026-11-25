@@ -317,3 +317,59 @@ test("play without pointer lock latches keys and a single canvas click", () => {
   const resumed = input.sample(true);
   assert.equal(resumed.firePresses, 0, "resume turned the pause click into a shot");
 });
+
+test("right click is alt and the canvas context menu is suppressed", () => {
+  const listeners = [];
+  const canvasListeners = [];
+  const canvas = {
+    addEventListener(type, fn) {
+      canvasListeners.push({ type, fn });
+    },
+  };
+  globalThis.document = {
+    pointerLockElement: canvas,
+    addEventListener() {},
+    querySelector() {
+      return null;
+    },
+  };
+  globalThis.window = {
+    addEventListener(type, fn) {
+      listeners.push({ type, fn });
+    },
+  };
+  const input = createInput(canvas);
+  input.sample(true);
+
+  const menu = canvasListeners.find((row) => row.type === "contextmenu");
+  assert.ok(menu, "canvas contextmenu listener");
+  let prevented = false;
+  menu.fn({
+    preventDefault() {
+      prevented = true;
+    },
+  });
+  assert.equal(prevented, true);
+
+  const down = listeners.find((row) => row.type === "mousedown");
+  let rightPrevented = false;
+  down.fn({
+    button: 2,
+    preventDefault() {
+      rightPrevented = true;
+    },
+  });
+  assert.equal(rightPrevented, true);
+  const held = input.sample(true);
+  assert.equal(held.down.alt, true);
+  assert.equal(held.pressed.alt, true);
+  assert.equal(held.down.fire, false);
+  assert.equal(held.firePresses, 0, "right click counted as a left click");
+
+  const up = listeners.find((row) => row.type === "mouseup");
+  up.fn({ button: 2 });
+  const released = input.sample(true);
+  assert.equal(released.down.alt, false);
+  assert.equal(released.released.alt, true);
+  assert.equal(released.firePresses, 0);
+});
