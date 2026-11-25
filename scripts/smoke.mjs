@@ -9,6 +9,7 @@ import {
   WISP_WAVE1_BURST_GAP,
   WISP_WAVE1_SPAWN_GRACE,
 } from "../src/wisp.ts";
+import { judgeHeldFire, judgeReload, settleSimVerdict } from "./smoke-fire.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const host = "127.0.0.1";
@@ -677,64 +678,94 @@ async function dispatchMouse(page, type) {
   }, type);
 }
 
+// Read after the input so the sample and the event share one turn. Playwright's
+// keyboard.press under pointer lock blocked for the whole reload on a quiet
+// machine (12 s, and the player took damage). An in-page key is sampled on the
+// next sim frame, same as the hold's mousedown.
+function readQuillAction(kind) {
+  if (kind === "down" || kind === "up") {
+    window.dispatchEvent(
+      new MouseEvent(kind === "down" ? "mousedown" : "mouseup", {
+        button: 0,
+        buttons: kind === "down" ? 1 : 0,
+        bubbles: true,
+      }),
+    );
+  } else if (kind === "reload") {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyR", key: "r", bubbles: true, cancelable: true }));
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyR", key: "r", bubbles: true, cancelable: true }));
+  }
+  const canvas = document.querySelector("canvas");
+  const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+  const hud = (document.querySelector("#hud-ammo")?.textContent ?? "").trim();
+  const hp = Number(document.querySelector("#hud-hp")?.textContent ?? "NaN");
+  return {
+    sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+    shots: typeof sim?.shots === "number" ? sim.shots : Number.NaN,
+    mag: typeof sim?.mag === "number" ? sim.mag : Number.NaN,
+    reserve: typeof sim?.reserve === "number" ? sim.reserve : Number.NaN,
+    reloading: sim?.reloading === true,
+    hud,
+    hp,
+    phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+  };
+}
+
 async function assertQuillFire(page, errors) {
   const ammoText = () => page.locator("#hud-ammo").innerText();
   const before = (await ammoText()).trim();
   if (before !== "40+40") errors.push(`ammo before fire is ${before}`);
-  await dispatchMouse(page, "mousedown");
+  const sample = () => page.evaluate(readQuillAction, "read");
   let stats = null;
+  let held = null;
+  let fireStartSim = Number.NaN;
+  const fireWall = Date.now();
   try {
-    await page.waitForFunction(
-      () => {
-        const mag = Number((document.querySelector("#hud-ammo")?.textContent ?? "").split("+")[0]);
-        return Number.isFinite(mag) && mag <= 34;
-      },
-      undefined,
-      { timeout: 15_000, polling: 50 },
-    );
-    stats = await page.evaluate(() => {
-      const canvas = document.querySelector("canvas");
-      if (!(canvas instanceof HTMLCanvasElement) || canvas.fragStats == null) return { error: "fragStats missing" };
-      return canvas.fragStats;
+    const start = await page.evaluate(readQuillAction, "down");
+    fireStartSim = start.sim;
+    held = await settleSimVerdict({
+      read: sample,
+      judge: (live) => judgeHeldFire({ sim: start.sim, shots: start.shots }, live),
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    errors.push(`holding fire did not drop ammo from 40 (now ${await ammoText()}): ${message}`);
+    if (held.verdict.state !== "pass") {
+      errors.push(`holding fire did not drop ammo from 40 (${held.verdict.reason})`);
+    } else {
+      stats = await page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        if (!(canvas instanceof HTMLCanvasElement) || canvas.fragStats == null) return { error: "fragStats missing" };
+        return canvas.fragStats;
+      });
+    }
   } finally {
     await dispatchMouse(page, "mouseup");
   }
   const mid = (await ammoText()).trim();
   const mag = Number(mid.split("+")[0]);
   if (!(mag < 40)) errors.push(`ammo digits did not drop from 40 (now ${mid})`);
-  await page.keyboard.press("KeyR");
-  const refilled = (previous) =>
-    page.waitForFunction(
-      (prior) => {
-        const text = document.querySelector("#hud-ammo")?.textContent ?? "";
-        return text.startsWith("40+") && text !== prior;
-      },
-      previous,
-      { timeout: 15_000, polling: 50 },
+  const reloadOnce = async () => {
+    const start = await page.evaluate(readQuillAction, "reload");
+    const settled = await settleSimVerdict({
+      read: sample,
+      judge: (live) => judgeReload({ sim: start.sim, mag: start.mag, reserve: start.reserve }, live),
+    });
+    return { ...settled, startSim: start.sim };
+  };
+  const reloadWall = Date.now();
+  let reloaded = await reloadOnce();
+  // A pointer-lock change clears a reload edge that has not been sampled yet.
+  // Send R again only when the sim shows that the first key never started a reload.
+  if (reloaded.verdict.state === "fail" && reloaded.verdict.code === "not-sampled") {
+    reloaded = await reloadOnce();
+  }
+  if (reloaded.verdict.state !== "pass") {
+    const snap = reloaded.sample;
+    errors.push(
+      `reload did not refill the magazine (${reloaded.verdict.reason}, hud ${snap?.hud ?? mid}, hp ${snap?.hp ?? "?"}, phase ${snap?.phase ?? "?"})`,
     );
-  try {
-    await refilled(mid);
-  } catch (error) {
-    // A lost pointer lock pauses the sim, so the first R never starts the reload.
-    await page.keyboard.press("KeyR");
-    try {
-      await refilled(mid);
-    } catch (retryError) {
-      const message = retryError instanceof Error ? retryError.message.split("\n")[0] : String(retryError);
-      const snap = await page.evaluate(() => ({
-        text: document.querySelector("#hud-ammo")?.textContent ?? "",
-        phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
-        hp: document.querySelector("#hud-hp")?.textContent ?? "",
-        mode: document.querySelector("#hud")?.getAttribute("data-mode") ?? "",
-      }));
-      errors.push(
-        `reload did not refill the magazine (now ${snap.text}, hp ${snap.hp}, hud ${snap.mode}, phase ${snap.phase}): ${message}`,
-      );
-    }
+  } else if (held?.verdict.state === "pass" && held.sample && reloaded.sample) {
+    console.log(
+      `quill hold: ${before} -> ${held.sample.hud} in ${Date.now() - fireWall}ms wall (${(held.sample.sim - fireStartSim).toFixed(3)}s sim), reload ${mid} -> ${reloaded.sample.hud} in ${Date.now() - reloadWall}ms wall (${(reloaded.sample.sim - reloaded.startSim).toFixed(3)}s sim)`,
+    );
   }
   const drones = await readDrones(page);
   if (drones.error) errors.push(drones.error);
