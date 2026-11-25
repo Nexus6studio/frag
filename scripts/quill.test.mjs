@@ -7,6 +7,7 @@ import { createPlayerState } from "../src/player/state.ts";
 import {
   QUILL_DAMAGE,
   QUILL_INTERVAL,
+  QUILL_MAG,
   QUILL_POOL_CAP,
   QUILL_PUNCH_DEG,
   QUILL_RELOAD,
@@ -14,6 +15,7 @@ import {
   aimDirection,
   createQuill,
 } from "../src/quill.ts";
+import { SPINE_FULL_LENGTH, paintSpine, spineFromMagazine } from "../src/quill-spine.ts";
 
 const origin = { x: 0, y: 0, z: 0 };
 const forward = { x: 0, y: 0, z: -1 };
@@ -554,6 +556,126 @@ test("a press during reload or an empty magazine does not fire afterward", () =>
   dry.update(0.2, paced(false, 4));
   dry.update(1, paced(false, 0));
   assert.equal(dry.shotsFired, stuck, "an empty click fired once rounds were still gone");
+});
+
+const SPINE_CYAN = [0x3d / 255, 0xe1 / 255, 0xff / 255];
+const SPINE_AMBER = [0xf5 / 255, 0xa6 / 255, 0x23 / 255];
+const SPINE_RED = [0xff / 255, 0x3a / 255, 0x42 / 255];
+
+function assertColor(actual, expected, label) {
+  assert.equal(actual.length, 3, label);
+  for (let i = 0; i < 3; i += 1) {
+    assert.ok(Math.abs(actual[i] - expected[i]) < 1e-6, `${label} channel ${i}: ${actual[i]} vs ${expected[i]}`);
+  }
+}
+
+function mix(a, b, u) {
+  return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u];
+}
+
+test("magazine fraction maps to spine length and cyan, amber, then red", () => {
+  assert.ok(SPINE_FULL_LENGTH > 0.2 && SPINE_FULL_LENGTH < 0.7, `spine length ${SPINE_FULL_LENGTH}`);
+
+  const full = spineFromMagazine(1);
+  assert.equal(full.length, SPINE_FULL_LENGTH);
+  assertColor(full.color, SPINE_CYAN, "full");
+
+  const nearFull = spineFromMagazine(0.82);
+  assert.ok(Math.abs(nearFull.length - 0.82 * SPINE_FULL_LENGTH) < 1e-9);
+  assertColor(nearFull.color, SPINE_CYAN, "near full");
+
+  const amber = spineFromMagazine(0.45);
+  assert.ok(Math.abs(amber.length - 0.45 * SPINE_FULL_LENGTH) < 1e-9);
+  assertColor(amber.color, SPINE_AMBER, "amber stop");
+
+  const empty = spineFromMagazine(0);
+  assert.equal(empty.length, 0);
+  assertColor(empty.color, SPINE_RED, "empty");
+
+  const over = spineFromMagazine(2);
+  assert.equal(over.length, SPINE_FULL_LENGTH);
+  assertColor(over.color, SPINE_CYAN, "over full");
+  const under = spineFromMagazine(-0.4);
+  assert.equal(under.length, 0);
+  assertColor(under.color, SPINE_RED, "negative");
+  const missing = spineFromMagazine(Number.NaN);
+  assert.equal(missing.length, 0);
+  assertColor(missing.color, SPINE_RED, "nan");
+
+  const high = (0.45 + 0.82) / 2;
+  const highBar = spineFromMagazine(high);
+  assert.ok(Math.abs(highBar.length - high * SPINE_FULL_LENGTH) < 1e-9);
+  assertColor(highBar.color, mix(SPINE_AMBER, SPINE_CYAN, (high - 0.45) / (0.82 - 0.45)), "cyan-amber mix");
+
+  const low = 0.225;
+  const lowBar = spineFromMagazine(low);
+  assert.ok(Math.abs(lowBar.length - low * SPINE_FULL_LENGTH) < 1e-9);
+  assertColor(lowBar.color, mix(SPINE_RED, SPINE_AMBER, low / 0.45), "amber-red mix");
+});
+
+function spineSpan(fraction) {
+  const position = new Float32Array(36 * 3);
+  const color = new Float32Array(36 * 3);
+  paintSpine(position, color, 0, fraction);
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < 36; i += 1) {
+    const z = position[i * 3 + 2];
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  return { minZ, maxZ, span: maxZ - minZ, color: [color[0], color[1], color[2]] };
+}
+
+test("the painted spine shrinks from the muzzle and uses the magazine color", () => {
+  const full = spineSpan(1);
+  const partial = spineSpan(0.45);
+  const empty = spineSpan(0);
+  const mapped = spineFromMagazine(0.45);
+  assert.ok(Math.abs(full.span - SPINE_FULL_LENGTH) < 1e-6, `full span ${full.span}`);
+  assert.ok(Math.abs(partial.span - mapped.length) < 1e-6, `partial span ${partial.span}`);
+  assert.ok(Math.abs(full.maxZ - partial.maxZ) < 1e-6, "the stock end of the spine moved");
+  assert.ok(partial.minZ > full.minZ, "the muzzle end did not retreat");
+  assert.ok(empty.span < 1e-6, `empty span ${empty.span}`);
+  assertColor(partial.color, mapped.color, "painted amber");
+  assertColor(spineSpan(1).color, spineFromMagazine(1).color, "painted cyan");
+  assertColor(empty.color, spineFromMagazine(0).color, "painted red");
+});
+
+test("the spine follows the live magazine through reload and a reserve pickup", () => {
+  const quill = fresh();
+  const read = () => spineFromMagazine(quill.mag / QUILL_MAG);
+  assert.equal(quill.mag, QUILL_MAG);
+  assert.equal(read().length, SPINE_FULL_LENGTH);
+  assertColor(read().color, SPINE_CYAN, "start");
+
+  let guard = 0;
+  while (quill.mag > 18 && guard < 80) {
+    quill.update(QUILL_INTERVAL, paced(true, 0));
+    guard += 1;
+  }
+  assert.equal(quill.mag, 18);
+  const partial = read();
+  assert.ok(Math.abs(partial.length / SPINE_FULL_LENGTH - 18 / QUILL_MAG) < 1e-9);
+  assertColor(partial.color, SPINE_AMBER, "18 rounds");
+
+  const beforePickup = partial.length;
+  assert.ok(quill.grantReserve(40) > 0);
+  assert.equal(quill.mag, 18, "a pickup filled the magazine");
+  assert.equal(read().length, beforePickup, "a reserve pickup changed the spine");
+
+  quill.update(0, paced(false, 0, true));
+  assert.equal(quill.reloading, true);
+  quill.update(QUILL_RELOAD / 2, paced(false, 0));
+  assert.equal(quill.reloading, true);
+  assert.equal(quill.mag, 18, "reload changed the magazine before it finished");
+  assert.equal(read().length, beforePickup, "the spine filled during the reload");
+
+  quill.update(QUILL_RELOAD / 2, paced(false, 0));
+  assert.equal(quill.reloading, false);
+  assert.equal(quill.mag, QUILL_MAG);
+  assert.equal(read().length, SPINE_FULL_LENGTH);
+  assertColor(read().color, SPINE_CYAN, "reloaded");
 });
 
 test("held fire stays at 8.000 shots/s at 5, 30, and 120 fps", () => {

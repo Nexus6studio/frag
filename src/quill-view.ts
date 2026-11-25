@@ -25,7 +25,8 @@ import {
 } from "three";
 import { registerHitbox, type HitboxHandle } from "./hitbox.ts";
 import type { Vec3 } from "./move.ts";
-import { QUILL_LENGTH, type QuillDriver } from "./quill.ts";
+import { QUILL_LENGTH, QUILL_MAG, type QuillDriver } from "./quill.ts";
+import { SPINE_VERTEX_COUNT, paintSpine } from "./quill-spine.ts";
 
 export interface QuillDebugTarget {
   center: Vec3;
@@ -72,6 +73,8 @@ export function mountQuillView(
   viewmodel.name = "quill-viewmodel";
   viewmodel.frustumCulled = false;
   anchor.add(viewmodel);
+  const spineVertex = viewmodel.geometry.getAttribute("position").count - SPINE_VERTEX_COUNT;
+  let shownMag = QUILL_MAG;
 
   const flashMaterial = new MeshBasicMaterial({
     vertexColors: true,
@@ -158,6 +161,19 @@ export function mountQuillView(
         );
         count += 1;
       }
+      if (driver.mag !== shownMag) {
+        shownMag = driver.mag;
+        const positions = viewmodel.geometry.getAttribute("position");
+        const colors = viewmodel.geometry.getAttribute("color");
+        paintSpine(
+          positions.array as Float32Array,
+          colors.array as Float32Array,
+          spineVertex,
+          driver.mag / QUILL_MAG,
+        );
+        positions.needsUpdate = true;
+        colors.needsUpdate = true;
+      }
       bodies.count = count;
       tracers.count = count;
       const drawing = count > 0;
@@ -236,11 +252,19 @@ function viewmodelGeometry(): BufferGeometry {
     [-0.016, 0.028, -0.012, 0.034, 0.24, 0.27, MAGENTA],
     [-0.006, 0.012, 0.06, 0.095, -0.46, -0.42, CYAN],
     [-0.008, 0.014, 0.06, 0.082, 0.02, 0.055, AMBER],
+    // Empty magazine track. The lit spine sits on this and shrinks toward the stock.
+    [-0.012, 0.018, 0.056, 0.063, -0.4, 0.06, STEEL_DARK],
   ];
   for (const part of parts) {
     const [r, g, b] = hexRgb(part[6]);
     pushBox(position, color, part[0], part[1], part[2], part[3], part[4], part[5], r, g, b);
   }
+  // Magazine lamp. Same mesh as the carbine, so it does not add a draw.
+  const spinePos = new Float32Array(SPINE_VERTEX_COUNT * 3);
+  const spineCol = new Float32Array(SPINE_VERTEX_COUNT * 3);
+  paintSpine(spinePos, spineCol, 0, 1);
+  for (let i = 0; i < spinePos.length; i += 1) position.push(spinePos[i]!);
+  for (let i = 0; i < spineCol.length; i += 1) color.push(spineCol[i]!);
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new Float32BufferAttribute(position, 3));
   geometry.setAttribute("color", new Float32BufferAttribute(color, 3));

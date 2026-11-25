@@ -1238,9 +1238,12 @@ async function runDevSmoke(browser, errors) {
       const before = death?.textContent ?? "";
       const shown = death instanceof HTMLElement && death.hidden === false;
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "Escape", bubbles: true, cancelable: true }));
+      document.exitPointerLock();
+      document.dispatchEvent(new Event("pointerlockchange"));
       window.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
       document.dispatchEvent(new Event("visibilitychange"));
       window.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+      const pause = document.querySelector("#pause");
       return {
         shown,
         hp: document.querySelector("#hud-hp")?.textContent ?? "",
@@ -1249,14 +1252,19 @@ async function runDevSmoke(browser, errors) {
         before,
         count: document.querySelectorAll("#death-recap").length,
         warningHidden: document.querySelector("#content-warning")?.hidden ?? false,
+        pauseHidden: pause instanceof HTMLElement ? pause.hidden : null,
+        deathHidden: death instanceof HTMLElement ? death.hidden : null,
       };
     });
-    if (!raced.shown) errors.push("death during pause did not show the recap before the blur");
-    if (raced.hp !== "0") errors.push(`death during pause/blur restarted (hp ${raced.hp})`);
-    if (raced.phase !== "paused") errors.push(`death during pause left phase ${raced.phase}`);
+    if (!raced.shown) errors.push("death recap was hidden before the lock loss");
+    if (raced.hp !== "0") errors.push(`death lock loss restarted (hp ${raced.hp})`);
+    if (raced.phase !== "playing" || raced.pauseHidden !== true) {
+      errors.push(`death lock loss opened pause (${raced.phase}, pause hidden ${raced.pauseHidden})`);
+    }
+    if (raced.deathHidden !== false) errors.push("death recap hidden after the lock loss");
     if (raced.count !== 1) errors.push(`death recap elements ${raced.count}`);
-    if (raced.text !== raced.before) errors.push("death during pause rewrote the recap");
-    if (!raced.warningHidden) errors.push("warning returned when dying during pause");
+    if (raced.text !== raced.before) errors.push("death lock loss rewrote the recap");
+    if (!raced.warningHidden) errors.push("warning returned on the death recap");
     if (raced.phase === "paused") await page.locator("#pause-resume").click();
     const resumedDead = await page.evaluate(() => {
       const death = document.querySelector("#death-recap");

@@ -967,3 +967,96 @@ test("wall, ramp, and pillar panels share one tiled texture and trim stays in bu
     `panel shared across shell+ramp, trim tris ${trimTris}, atrium meshes ${view.meshes.length}, triangles ${view.triangles}`,
   );
 });
+
+test("skylight motes stay pooled inside the shaft and descend", async () => {
+  const { MOTE_BOTTOM, MOTE_COUNT, MOTE_LIMIT, MOTE_TOP, motePosition } = await import("../src/atrium-air.ts");
+  assert.ok(MOTE_COUNT >= 16 && MOTE_COUNT <= 36, `mote pool ${MOTE_COUNT}`);
+  assert.ok(MOTE_LIMIT < 3.1, `motes reach the jump pads at ${MOTE_LIMIT}`);
+  assert.ok(MOTE_BOTTOM > 0.15 && MOTE_TOP < 8.9, `mote column ${MOTE_BOTTOM}..${MOTE_TOP}`);
+  const a = { x: 0, y: 0, z: 0 };
+  const b = { x: 0, y: 0, z: 0 };
+  let descended = false;
+  for (let i = 0; i < MOTE_COUNT; i += 1) {
+    motePosition(i, 1.25, a);
+    assert.ok(Math.hypot(a.x, a.z) <= MOTE_LIMIT + 1e-6, `mote ${i} left the shaft at ${a.x}, ${a.z}`);
+    assert.ok(a.y >= MOTE_BOTTOM - 1e-6 && a.y <= MOTE_TOP + 1e-6, `mote ${i} y ${a.y}`);
+    const saved = { x: a.x, y: a.y, z: a.z };
+    motePosition(i, 1.25, b);
+    assert.deepEqual(b, saved, `mote ${i} is not deterministic`);
+    let prev = saved.y;
+    for (let step = 1; step <= 8; step += 1) {
+      motePosition(i, 1.25 + step * 0.45, a);
+      if (a.y < prev - 0.08) descended = true;
+      prev = a.y;
+    }
+  }
+  assert.equal(descended, true, "motes did not descend");
+});
+
+test("pillar scan bands move between the plinth and the cap", async () => {
+  const { ATRIUM_PILLARS, GROUND_Y } = await import("../src/atrium.ts");
+  const { BANDS_PER_PILLAR, BAND_HIGH, BAND_LOW, pillarBandY } = await import("../src/atrium-air.ts");
+  assert.equal(ATRIUM_PILLARS.length, 4);
+  assert.ok(BAND_LOW > GROUND_Y + 0.4, `band starts on the plinth at ${BAND_LOW}`);
+  assert.ok(BAND_HIGH < ATRIUM_PILLARS[0].top - 0.2, `band covers the cap at ${BAND_HIGH}`);
+  for (let pillar = 0; pillar < ATRIUM_PILLARS.length; pillar += 1) {
+    for (let band = 0; band < BANDS_PER_PILLAR; band += 1) {
+      const y0 = pillarBandY(pillar, band, 0);
+      const y1 = pillarBandY(pillar, band, 1.6);
+      assert.ok(y0 >= BAND_LOW - 1e-6 && y0 <= BAND_HIGH + 1e-6, `pillar ${pillar} band ${band} y ${y0}`);
+      assert.ok(y1 >= BAND_LOW - 1e-6 && y1 <= BAND_HIGH + 1e-6, `pillar ${pillar} band ${band} later y ${y1}`);
+      assert.notEqual(y0, y1, `pillar ${pillar} band ${band} did not move`);
+    }
+    const split = Math.abs(pillarBandY(pillar, 0, 0) - pillarBandY(pillar, 1, 0));
+    assert.ok(split > 0.4, `pillar ${pillar} bands overlap (${split})`);
+  }
+});
+
+test("motes and pillar bands reuse the amber glow mesh", async () => {
+  const { ATRIUM_FOG, ATRIUM_FOG_DENSITY, ATRIUM_CLEAR, applyAtriumMotion, buildAtriumView } = await import(
+    "../src/floor.ts"
+  );
+  const { motePosition } = await import("../src/atrium-air.ts");
+  const { readFileSync } = await import("node:fs");
+  assert.equal(ATRIUM_FOG, 0x0c1016);
+  assert.equal(ATRIUM_CLEAR, 0x0a0b10);
+  assert.ok(ATRIUM_FOG_DENSITY >= 0.012 && ATRIUM_FOG_DENSITY <= 0.02, `fog density ${ATRIUM_FOG_DENSITY}`);
+  const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+  assert.match(main, /new FogExp2\(ATRIUM_FOG,\s*ATRIUM_FOG_DENSITY\)/);
+
+  const view = buildAtriumView();
+  assert.ok(view.meshes.length <= 16, `meshes ${view.meshes.length}`);
+  assert.equal(
+    view.meshes.some((mesh) => mesh.name === "atrium-motes" || mesh.name === "atrium-pillar-accent"),
+    false,
+    "atmosphere added a mesh",
+  );
+  const amber = view.meshes.find((mesh) => mesh.name === "atrium-amber");
+  assert.ok(amber, "amber glow mesh missing");
+  const position = amber.geometry.getAttribute("position");
+  const mote = { x: 0, y: 0, z: 0 };
+  applyAtriumMotion(amber, 2);
+  motePosition(0, 2, mote);
+  let near = false;
+  for (let i = 0; i < position.count; i += 1) {
+    const dx = position.getX(i) - mote.x;
+    const dy = position.getY(i) - mote.y;
+    const dz = position.getZ(i) - mote.z;
+    if (dx * dx + dy * dy + dz * dz < 0.12 * 0.12) near = true;
+  }
+  assert.equal(near, true, "amber mesh has no skylight mote");
+
+  const sample = (time) => {
+    applyAtriumMotion(amber, time);
+    const ys = [];
+    for (let i = 0; i < position.count; i += 1) {
+      if (position.getX(i) > 6.05 + 0.5 && Math.abs(position.getZ(i) - 6.05) < 1) ys.push(position.getY(i));
+    }
+    return ys;
+  };
+  const atRest = sample(0);
+  const later = sample(1.7);
+  assert.ok(atRest.length > 8, `no pillar band vertices (${atRest.length})`);
+  assert.notDeepEqual(atRest, later, "pillar bands did not scroll");
+  assert.ok(view.triangles <= 50_000, `triangles ${view.triangles}`);
+});

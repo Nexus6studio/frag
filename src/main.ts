@@ -19,7 +19,7 @@ import { createAudio } from "./audio.ts";
 import { cueFor, hurtFromVitals, type SimEvent } from "./cues.ts";
 import { createCombatFeedback, strafeOf, stepWalkPhase, viewmodelOffset } from "./feel.ts";
 import { restartCombat } from "./combat.ts";
-import { ATRIUM_CLEAR, ATRIUM_FOG, addAtrium, syncPadViews } from "./floor.ts";
+import { ATRIUM_CLEAR, ATRIUM_FOG, ATRIUM_FOG_DENSITY, addAtrium, syncPadViews } from "./floor.ts";
 import { createFight } from "./fight.ts";
 import { playerHitboxes } from "./hitbox.ts";
 import { mountHud } from "./hud/hud";
@@ -85,9 +85,13 @@ const hear = (event: SimEvent): void => {
   if (event.type === "enemy-hit") feedback.noteHit(false);
   else if (event.type === "enemy-kill") feedback.noteHit(true);
 };
+let playerDead = (): boolean => false;
 const shell = mountShell(renderer.domElement, {
   onGesture() {
     audio.prime();
+  },
+  dead() {
+    return playerDead();
   },
   onMute() {
     audio.prime();
@@ -110,6 +114,7 @@ const benchHp = (window as Window & { __fragBenchHp?: unknown }).__fragBenchHp;
 const player = createPlayerState(
   typeof benchHp === "number" && Number.isFinite(benchHp) && benchHp > 0 ? { hp: benchHp } : undefined,
 );
+playerDead = () => player.get().hp <= 0;
 let heardHp = player.get().hp;
 player.subscribe((state) => {
   if (hurtFromVitals(heardHp, state.hp)) hear({ type: "player-hurt" });
@@ -126,7 +131,7 @@ let mover = createAtriumMover(createMoveState(ATRIUM_SPAWN), hearLaunch);
 
 const scene = new Scene();
 scene.background = new Color(ATRIUM_CLEAR);
-scene.fog = new FogExp2(ATRIUM_FOG, 0.015);
+scene.fog = new FogExp2(ATRIUM_FOG, ATRIUM_FOG_DENSITY);
 const atrium = addAtrium(scene);
 scene.add(new HemisphereLight(0x8ea4bc, 0x1a120c, 0.55));
 const sheen = new DirectionalLight(0xd5e4f2, 0.85);
