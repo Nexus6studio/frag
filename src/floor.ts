@@ -8,6 +8,7 @@ import {
   BufferGeometry,
   CanvasTexture,
   DoubleSide,
+  DynamicDrawUsage,
   Float32BufferAttribute,
   Mesh,
   MeshBasicMaterial,
@@ -43,6 +44,7 @@ import {
   type AtriumRamp,
   type AtriumStair,
 } from "./atrium.ts";
+import { motionVertexCount, paintMotionPositions } from "./atrium-air.ts";
 import { PANEL_METERS, createPanelTexture } from "./panel.ts";
 import {
   AMMO_COLOR,
@@ -211,6 +213,47 @@ function glowMesh(soup: Soup, color: number, name: string): Mesh {
   );
   mesh.name = name;
   return mesh;
+}
+
+/**
+ * Appends skylight motes and pillar bands to the amber beacons.
+ * One mesh keeps the bloom pass from drawing the atmosphere a second time as its own object.
+ */
+function attachAtriumMotion(mesh: Mesh): void {
+  const geometry = mesh.geometry;
+  const position = geometry.getAttribute("position");
+  const normal = geometry.getAttribute("normal");
+  const uv = geometry.getAttribute("uv");
+  const staticVerts = position.count;
+  const extra = motionVertexCount();
+  const total = staticVerts + extra;
+  const nextPos = new Float32Array(total * 3);
+  const nextNor = new Float32Array(total * 3);
+  const nextUv = new Float32Array(total * 2);
+  nextPos.set(position.array as Float32Array);
+  nextNor.set(normal.array as Float32Array);
+  nextUv.set(uv.array as Float32Array);
+  paintMotionPositions(nextPos, staticVerts, 0);
+  const posAttr = new Float32BufferAttribute(nextPos, 3);
+  posAttr.setUsage(DynamicDrawUsage);
+  geometry.setAttribute("position", posAttr);
+  geometry.setAttribute("normal", new Float32BufferAttribute(nextNor, 3));
+  geometry.setAttribute("uv", new Float32BufferAttribute(nextUv, 2));
+  geometry.computeBoundingSphere();
+  mesh.frustumCulled = false;
+  mesh.userData.motionStart = staticVerts;
+  mesh.onBeforeRender = () => {
+    applyAtriumMotion(mesh, performance.now() / 1000);
+  };
+}
+
+/** Scrolls the amber mesh's mote and band vertices. The beacon verts stay put. */
+export function applyAtriumMotion(mesh: Mesh, time: number): void {
+  const start = mesh.userData.motionStart;
+  if (typeof start !== "number") return;
+  const position = mesh.geometry.getAttribute("position");
+  paintMotionPositions(position.array as Float32Array, start, time);
+  position.needsUpdate = true;
 }
 
 function addRamp(soup: Soup, ramp: AtriumRamp): void {
@@ -1071,6 +1114,7 @@ export function buildAtriumView(): AtriumView {
   addChannels(cyan, magenta);
   const amber = new Soup();
   addBeacons(amber);
+  const motionTriangles = motionVertexCount() / 3;
   const pads = buildPadViews();
   const jumpPads = jumpPadMesh();
   const jumpColumns = jumpColumnMesh();
@@ -1086,6 +1130,8 @@ export function buildAtriumView(): AtriumView {
     glowMesh(magenta, MAGENTA, "atrium-magenta"),
     glowMesh(amber, AMBER, "atrium-amber"),
   ];
+  const amberMesh = meshes[meshes.length - 1];
+  if (amberMesh) attachAtriumMotion(amberMesh);
   for (const pad of pads.pads) meshes.push(pad.mesh);
   meshes.push(jumpPads.mesh);
   meshes.push(jumpColumns.mesh);
@@ -1097,6 +1143,7 @@ export function buildAtriumView(): AtriumView {
     cyan.triangles +
     magenta.triangles +
     amber.triangles +
+    motionTriangles +
     pads.triangles +
     jumpPads.triangles +
     jumpColumns.triangles;
@@ -1114,3 +1161,5 @@ export function addAtrium(scene: Scene): { triangles: number; meshes: number; pa
 
 export const ATRIUM_CLEAR = VOID;
 export const ATRIUM_FOG = 0x0c1016;
+/** Exponential fog. Light enough that a drone at 14 m and the slot lips stay readable. */
+export const ATRIUM_FOG_DENSITY = 0.015;
