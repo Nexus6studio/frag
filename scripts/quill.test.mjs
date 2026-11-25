@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ATRIUM_STAIRS, GROUND_Y, STAIR_MOUTH_Z, STAIR_RISE, createAtriumHull } from "../src/atrium.ts";
+import { ATRIUM_SPAWN, ATRIUM_STAIRS, GROUND_Y, STAIR_MOUTH_Z, STAIR_RISE, createAtriumHull } from "../src/atrium.ts";
 import { createHitboxWorld, registerHitbox } from "../src/hitbox.ts";
 import { hudReadout } from "../src/hud/model.ts";
 import { createPlayerState } from "../src/player/state.ts";
+import { WISP_HP, createWispSim } from "../src/wisp.ts";
 import {
   QUILL_BURST,
   QUILL_BURST_COST,
   QUILL_BURST_COOLDOWN,
+  QUILL_BURST_DAMAGE,
   QUILL_CHARGE,
   QUILL_CHARGE_ABORT,
   QUILL_DAMAGE,
@@ -711,6 +713,7 @@ function releaseAlt() {
 test("charged pierce burst damages two lined-up enemies and stops at the third", () => {
   const world = createHitboxWorld();
   const dealt = [0, 0, 0];
+  const packets = [[], [], []];
   const ranges = [-8, -12, -16];
   for (let i = 0; i < ranges.length; i += 1) {
     const index = i;
@@ -719,6 +722,7 @@ test("charged pierce burst damages two lined-up enemies and stops at the third",
       radius: 0.3,
       onHit(damage) {
         dealt[index] += damage;
+        packets[index].push(damage);
       },
     });
   }
@@ -740,8 +744,12 @@ test("charged pierce burst damages two lined-up enemies and stops at the third",
     `spine dropped ${before.length - after.length}, expected 5 rounds`,
   );
   quill.update(0.45, releaseAlt());
-  assert.equal(dealt[0], QUILL_BURST * QUILL_DAMAGE, `front enemy took ${dealt[0]}`);
-  assert.equal(dealt[1], QUILL_BURST * QUILL_DAMAGE, `enemy behind took ${dealt[1]}`);
+  assert.equal(QUILL_BURST_DAMAGE, 18);
+  assert.notEqual(QUILL_BURST_DAMAGE, QUILL_DAMAGE);
+  assert.deepEqual(packets[0], [QUILL_BURST_DAMAGE, QUILL_BURST_DAMAGE, QUILL_BURST_DAMAGE]);
+  assert.deepEqual(packets[1], [QUILL_BURST_DAMAGE, QUILL_BURST_DAMAGE, QUILL_BURST_DAMAGE]);
+  assert.equal(dealt[0], QUILL_BURST * QUILL_BURST_DAMAGE, `front enemy took ${dealt[0]}`);
+  assert.equal(dealt[1], QUILL_BURST * QUILL_BURST_DAMAGE, `enemy behind took ${dealt[1]}`);
   assert.equal(dealt[2], 0, `a third enemy was pierced, took ${dealt[2]}`);
   assert.ok(events.includes("quill-charge"));
   assert.ok(events.includes("quill-charge-end"));
@@ -777,7 +785,7 @@ test("a charged flechette does not pierce a hull to the enemy behind it", () => 
   const quill = createQuill({ hull, hitboxes: world });
   quill.update(QUILL_CHARGE, holdAlt());
   quill.update(0.4, releaseAlt());
-  assert.equal(front, QUILL_BURST * QUILL_DAMAGE);
+  assert.equal(front, QUILL_BURST * QUILL_BURST_DAMAGE);
   assert.equal(behind, 0);
 });
 
@@ -887,4 +895,105 @@ test("left-click full-auto stays at 8 shots/s when alt-fire is unused", () => {
   assert.ok(Math.abs(rate - 8) < 1e-6, `primary rate ${rate}`);
   assert.ok(Math.abs(span - 1) < dt, `primary span ${span}`);
   assert.equal(pacedOnly.charging, false);
+});
+
+test("one on-target charged burst kills a full-HP drone", () => {
+  const hull = createAtriumHull();
+  const player = createPlayerState();
+  const hitboxes = createHitboxWorld();
+  const sim = createWispSim({ hull, player, hitboxes, origin: ATRIUM_SPAWN });
+  const drone = sim.drones[0];
+  drone.position.x = 0;
+  drone.position.y = 1.2;
+  drone.position.z = -8;
+  sim.drones[1].position.x = 14;
+  sim.drones[1].position.y = 1.2;
+  sim.drones[1].position.z = 14;
+  assert.equal(WISP_HP, 40);
+  assert.equal(drone.hp, WISP_HP);
+  assert.equal(drone.alive, true);
+
+  const quill = createQuill({ hitboxes, hull: null });
+  const hold = {
+    fire: false,
+    presses: 0,
+    reload: false,
+    alt: true,
+    origin: { x: 0, y: 1.2, z: 0 },
+    direction: { x: 0, y: 0, z: -1 },
+  };
+  const release = { ...hold, alt: false };
+  quill.update(QUILL_CHARGE, hold);
+  assert.equal(quill.shotsFired, QUILL_BURST);
+  assert.equal(quill.mag, QUILL_MAG - QUILL_BURST_COST);
+  assert.equal(drone.alive, true, "the burst hit before the flechettes flew");
+  assert.equal(drone.hp, WISP_HP);
+  quill.update(0.3, release);
+  assert.equal(drone.hp, 0);
+  assert.equal(drone.alive, false);
+});
+
+test("primary sustained single-target DPS beats alt-fire", () => {
+  const target = () => {
+    const world = createHitboxWorld();
+    const hits = [];
+    world.register({
+      center: { x: 0, y: 0, z: -8 },
+      radius: 0.3,
+      onHit(damage) {
+        hits.push(damage);
+      },
+    });
+    return { world, hits };
+  };
+
+  const shots = 16;
+  const primary = target();
+  const quill = createQuill({ hitboxes: primary.world });
+  const dt = 1 / 120;
+  let guard = 0;
+  while (quill.shotsFired < shots && guard < 10000) {
+    quill.update(dt, paced(true, 0));
+    guard += 1;
+  }
+  let fly = 0;
+  while (primary.hits.length < shots && fly < 1) {
+    quill.update(dt, paced(false, 0));
+    fly += dt;
+  }
+  assert.equal(primary.hits.length, shots);
+  assert.ok(primary.hits.every((damage) => damage === QUILL_DAMAGE));
+  assert.equal(QUILL_DAMAGE, 9);
+  const span = quill.shotTime(shots - 1) - quill.shotTime(0) + QUILL_INTERVAL;
+  const primaryDamage = primary.hits.reduce((sum, damage) => sum + damage, 0);
+  const primaryDps = primaryDamage / span;
+  assert.ok(Math.abs(1 / QUILL_INTERVAL - 8) < 1e-12);
+  assert.ok(Math.abs(primaryDps - QUILL_DAMAGE / QUILL_INTERVAL) < 1e-9, `primary DPS ${primaryDps}`);
+
+  const cycles = 3;
+  const alt = target();
+  const burst = createQuill({ hitboxes: alt.world });
+  const startMag = burst.mag;
+  for (let i = 0; i < cycles; i += 1) {
+    burst.update(QUILL_CHARGE, holdAlt());
+    burst.update(QUILL_BURST_COOLDOWN, releaseAlt());
+  }
+  assert.equal(burst.shotsFired, cycles * QUILL_BURST);
+  assert.equal(startMag - burst.mag, cycles * QUILL_BURST_COST);
+  assert.equal(QUILL_BURST_COST, 5);
+  assert.equal(QUILL_CHARGE, 0.45);
+  assert.equal(QUILL_BURST_COOLDOWN, 0.8);
+  assert.equal(alt.hits.length, cycles * QUILL_BURST);
+  assert.equal(QUILL_BURST_DAMAGE, 18);
+  assert.notEqual(QUILL_BURST_DAMAGE, QUILL_DAMAGE);
+  assert.ok(alt.hits.every((damage) => damage === QUILL_BURST_DAMAGE));
+  const altDamage = alt.hits.reduce((sum, damage) => sum + damage, 0);
+  const altSeconds = cycles * (QUILL_CHARGE + QUILL_BURST_COOLDOWN);
+  const altDps = altDamage / altSeconds;
+  const expectedAlt = (QUILL_BURST * QUILL_BURST_DAMAGE) / (QUILL_CHARGE + QUILL_BURST_COOLDOWN);
+  assert.ok(Math.abs(altDps - expectedAlt) < 1e-9, `alt DPS ${altDps}`);
+  assert.ok(primaryDps > altDps, `primary ${primaryDps} should beat alt ${altDps}`);
+  console.log(
+    `single-target DPS primary ${primaryDps.toFixed(4)} alt-fire ${altDps.toFixed(4)} over charge ${QUILL_CHARGE}s cooldown ${QUILL_BURST_COOLDOWN}s cost ${QUILL_BURST_COST}`,
+  );
 });
