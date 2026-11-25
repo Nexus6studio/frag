@@ -970,7 +970,7 @@ test("wall, ramp, and pillar panels share one tiled texture and trim stays in bu
 
 test("skylight motes stay pooled inside the shaft and descend", async () => {
   const { MOTE_BOTTOM, MOTE_COUNT, MOTE_LIMIT, MOTE_TOP, motePosition } = await import("../src/atrium-air.ts");
-  assert.ok(MOTE_COUNT >= 16 && MOTE_COUNT <= 36, `mote pool ${MOTE_COUNT}`);
+  assert.ok(MOTE_COUNT >= 16 && MOTE_COUNT <= 24, `mote pool ${MOTE_COUNT}`);
   assert.ok(MOTE_LIMIT < 3.1, `motes reach the jump pads at ${MOTE_LIMIT}`);
   assert.ok(MOTE_BOTTOM > 0.15 && MOTE_TOP < 8.9, `mote column ${MOTE_BOTTOM}..${MOTE_TOP}`);
   const a = { x: 0, y: 0, z: 0 };
@@ -1012,7 +1012,7 @@ test("pillar scan bands move between the plinth and the cap", async () => {
   }
 });
 
-test("motes and pillar bands reuse the amber glow mesh", async () => {
+test("pillar bands stay on the amber glow mesh", async () => {
   const { ATRIUM_FOG, ATRIUM_FOG_DENSITY, ATRIUM_CLEAR, applyAtriumMotion, buildAtriumView } = await import(
     "../src/floor.ts"
   );
@@ -1044,7 +1044,7 @@ test("motes and pillar bands reuse the amber glow mesh", async () => {
     const dz = position.getZ(i) - mote.z;
     if (dx * dx + dy * dy + dz * dz < 0.12 * 0.12) near = true;
   }
-  assert.equal(near, true, "amber mesh has no skylight mote");
+  assert.equal(near, false, "skylight motes are still on the amber beacons");
 
   const sample = (time) => {
     applyAtriumMotion(amber, time);
@@ -1060,3 +1060,139 @@ test("motes and pillar bands reuse the amber glow mesh", async () => {
   assert.notDeepEqual(atRest, later, "pillar bands did not scroll");
   assert.ok(view.triangles <= 50_000, `triangles ${view.triangles}`);
 });
+
+test("skylight motes are faint cool dust, not amber squares", async () => {
+  const { AdditiveBlending, Color } = await import("three");
+  const { MOTE_COUNT, motePosition } = await import("../src/atrium-air.ts");
+  const { buildAtriumView } = await import("../src/floor.ts");
+
+  // The pool stays at the accepted count, or a little under it. It cannot grow.
+  assert.ok(MOTE_COUNT <= 24 && MOTE_COUNT >= 16, `mote pool ${MOTE_COUNT}`);
+
+  const view = buildAtriumView();
+  assert.ok(view.meshes.length <= 16, `meshes ${view.meshes.length}`);
+  assert.equal(
+    view.meshes.some((mesh) => mesh.name === "atrium-motes"),
+    false,
+    "dust added its own mesh",
+  );
+
+  const amber = view.meshes.find((mesh) => mesh.name === "atrium-amber");
+  assert.ok(amber, "amber glow mesh missing");
+  const amberMaterial = amber.material;
+  const amberPaint = new Color(0xf5a623);
+  assert.ok(
+    Math.hypot(
+      amberMaterial.color.r - amberPaint.r,
+      amberMaterial.color.g - amberPaint.g,
+      amberMaterial.color.b - amberPaint.b,
+    ) < 1e-4,
+    "pillar bands left the amber beacon color",
+  );
+  assert.equal(amberMaterial.depthWrite, true, "pillar bands stopped writing depth");
+  assert.notEqual(amberMaterial.blending, AdditiveBlending, "pillar bands became additive");
+
+  const tint = new Color(0x9fd8ff);
+  const probe = { x: 0, y: 0, z: 0 };
+  const previousHalfW = 0.05;
+  const previousHalfH = 0.08;
+  let host = null;
+  for (let index = 0; index < MOTE_COUNT; index += 1) {
+    motePosition(index, 0, probe);
+    let verts = [];
+    let mesh = null;
+    for (const candidate of view.meshes) {
+      const found = vertsNear(candidate, probe, 0.15);
+      if (found.length > verts.length) {
+        verts = found;
+        mesh = candidate;
+      }
+    }
+    assert.ok(verts.length >= 6, `mote ${index} is not drawn`);
+    assert.ok(mesh && mesh !== amber, `mote ${index} is still painted on the amber beacons`);
+    if (!host) host = mesh;
+    assert.equal(mesh, host, `mote ${index} moved to a second mesh`);
+
+    const material = mesh.material;
+    assert.equal(material.depthWrite, false, "motes write depth");
+    assert.equal(material.blending, AdditiveBlending, "motes are not additive");
+    assert.equal(material.transparent, true, "motes are opaque");
+    assert.ok(material.opacity >= 0.35 && material.opacity <= 0.45, `mote opacity ${material.opacity}`);
+
+    let maxW = 0;
+    let maxH = 0;
+    for (const vert of verts) {
+      maxW = Math.max(maxW, Math.abs(vert.dx), Math.abs(vert.dz));
+      maxH = Math.max(maxH, Math.abs(vert.dy));
+      const gain = material.transparent ? material.opacity : 1;
+      const r = vert.r * material.color.r * gain;
+      const g = vert.g * material.color.g * gain;
+      const b = vert.b * material.color.b * gain;
+      const scaleR = r / tint.r;
+      const scaleG = g / tint.g;
+      const scaleB = b / tint.b;
+      assert.ok(
+        Math.abs(scaleR - scaleG) < 0.03 && Math.abs(scaleG - scaleB) < 0.03,
+        `mote ${index} left the #9fd8ff tint (${scaleR.toFixed(3)}, ${scaleG.toFixed(3)}, ${scaleB.toFixed(3)})`,
+      );
+      assert.ok(
+        scaleR >= 0.35 && scaleR <= 0.45,
+        `mote ${index} brightness scale ${scaleR.toFixed(3)} is outside 35–45%`,
+      );
+      const amber = new Color(0xf5a623);
+      const drift = Math.hypot(r - amber.r, g - amber.g, b - amber.b);
+      assert.ok(drift > 0.35, `mote ${index} is still amber (${r.toFixed(3)}, ${g.toFixed(3)}, ${b.toFixed(3)})`);
+    }
+    const widthRatio = maxW / previousHalfW;
+    const heightRatio = maxH / previousHalfH;
+    assert.ok(
+      widthRatio >= 0.55 && widthRatio <= 0.65 && heightRatio >= 0.55 && heightRatio <= 0.65,
+      `mote ${index} size is ${widthRatio.toFixed(2)} x ${heightRatio.toFixed(2)} of the old square`,
+    );
+  }
+
+  // The shared additive pass must not brighten the jump columns. Their added
+  // light stays the historical 0.28 of the saturated plate.
+  const columns = view.meshes.find((mesh) => mesh.name === "atrium-jump-columns");
+  assert.ok(columns, "jump columns missing");
+  const columnPos = columns.geometry.getAttribute("position");
+  const columnColor = columns.geometry.getAttribute("color");
+  const columnMaterial = columns.material;
+  const columnGain = columnMaterial.transparent ? columnMaterial.opacity : 1;
+  let columnLight = false;
+  for (let i = 0; i < columnPos.count; i += 1) {
+    if (columnPos.getY(i) < 3) continue;
+    if (Math.abs(columnPos.getX(i) - 3.95) > 0.2 || Math.abs(columnPos.getZ(i)) > 0.2) continue;
+    const r = columnColor.getX(i) * columnMaterial.color.r * columnGain;
+    const g = columnColor.getY(i) * columnMaterial.color.g * columnGain;
+    const b = columnColor.getZ(i) * columnMaterial.color.b * columnGain;
+    assert.ok(Math.abs(r) < 0.02, `east column red ${r}`);
+    assert.ok(Math.abs(g - 0.28) < 0.02 && Math.abs(b - 0.28) < 0.02, `east column light ${g}, ${b}`);
+    columnLight = true;
+    break;
+  }
+  assert.equal(columnLight, true, "east column light was not measured");
+});
+
+function vertsNear(mesh, center, radius) {
+  const position = mesh.geometry.getAttribute("position");
+  const color = mesh.geometry.getAttribute("color");
+  if (!position) return [];
+  const reach = radius * radius;
+  const found = [];
+  for (let i = 0; i < position.count; i += 1) {
+    const dx = position.getX(i) - center.x;
+    const dy = position.getY(i) - center.y;
+    const dz = position.getZ(i) - center.z;
+    if (dx * dx + dy * dy + dz * dz > reach) continue;
+    found.push({
+      dx,
+      dy,
+      dz,
+      r: color ? color.getX(i) : 1,
+      g: color ? color.getY(i) : 1,
+      b: color ? color.getZ(i) : 1,
+    });
+  }
+  return found;
+}

@@ -7,6 +7,7 @@ import {
   AdditiveBlending,
   BufferGeometry,
   CanvasTexture,
+  Color,
   DoubleSide,
   DynamicDrawUsage,
   Float32BufferAttribute,
@@ -44,7 +45,14 @@ import {
   type AtriumRamp,
   type AtriumStair,
 } from "./atrium.ts";
-import { motionVertexCount, paintMotionPositions } from "./atrium-air.ts";
+import {
+  MOTE_COLOR,
+  MOTE_GAIN,
+  moteVertexCount,
+  motionVertexCount,
+  paintMotes,
+  paintMotionPositions,
+} from "./atrium-air.ts";
 import { PANEL_METERS, createPanelTexture } from "./panel.ts";
 import {
   AMMO_COLOR,
@@ -216,8 +224,9 @@ function glowMesh(soup: Soup, color: number, name: string): Mesh {
 }
 
 /**
- * Appends skylight motes and pillar bands to the amber beacons.
- * One mesh keeps the bloom pass from drawing the atmosphere a second time as its own object.
+ * Appends the pillar bands to the amber beacons.
+ * The dust is painted onto the additive columns so it can be a different color
+ * without a second draw.
  */
 function attachAtriumMotion(mesh: Mesh): void {
   const geometry = mesh.geometry;
@@ -247,7 +256,7 @@ function attachAtriumMotion(mesh: Mesh): void {
   };
 }
 
-/** Scrolls the amber mesh's mote and band vertices. The beacon verts stay put. */
+/** Scrolls the amber mesh's band vertices. The beacon verts stay put. */
 export function applyAtriumMotion(mesh: Mesh, time: number): void {
   const start = mesh.userData.motionStart;
   if (typeof start !== "number") return;
@@ -979,11 +988,25 @@ function paintPads(position: Float32Array, color: Float32Array, phase: number): 
   }
 }
 
+/**
+ * Added light of a jump column before the dust shared this pass.
+ * Vertex color is scaled so plate * (COLUMN_LIGHT / MOTE_GAIN) * MOTE_GAIN
+ * still equals plate * COLUMN_LIGHT.
+ */
+const COLUMN_LIGHT = 0.28;
+const moteTint = new Color(MOTE_COLOR);
+const MOTE_RGB: RGB = [moteTint.r, moteTint.g, moteTint.b];
+
+function columnPlate(plate: RGB): RGB {
+  const scale = COLUMN_LIGHT / MOTE_GAIN;
+  return [plate[0] * scale, plate[1] * scale, plate[2] * scale];
+}
+
 function paintColumns(position: Float32Array, color: Float32Array, phase: number): void {
   let offset = 0;
   const rise = COLUMN_TOP - 0.4;
   for (const pad of ATRIUM_JUMP_PADS) {
-    const plate = pad.dirX > 0 ? PLATE_EAST : PLATE_WEST;
+    const plate = columnPlate(pad.dirX > 0 ? PLATE_EAST : PLATE_WEST);
     const half = 0.07;
     offset = writeQuad(
       position,
@@ -1062,10 +1085,14 @@ function padFloatCount(): number {
   return ATRIUM_JUMP_PADS.length * (boxVerts + chevronVerts) * 3;
 }
 
-function columnFloatCount(): number {
+function columnBodyFloats(): number {
   const crossVerts = 12;
   const particleVerts = PARTICLE_COUNT * 6;
   return ATRIUM_JUMP_PADS.length * (crossVerts + particleVerts) * 3;
+}
+
+function columnFloatCount(): number {
+  return columnBodyFloats() + moteVertexCount() * 3;
 }
 
 /** Saturated plates plus chevrons that scroll along the launch. */
@@ -1083,7 +1110,7 @@ function jumpPadMesh(): { mesh: Mesh; triangles: number } {
   return { mesh, triangles: padFloatCount() / 9 };
 }
 
-/** Thin additive column and rising specks. Depth is not written, so it cannot hide a target. */
+/** Thin additive column, rising specks, and the skylight dust. Depth is not written. */
 function jumpColumnMesh(): { mesh: Mesh; triangles: number } {
   const mesh = markMesh(
     "atrium-jump-columns",
@@ -1093,12 +1120,35 @@ function jumpColumnMesh(): { mesh: Mesh; triangles: number } {
       vertexColors: true,
       toneMapped: false,
       transparent: true,
-      opacity: 0.28,
+      opacity: MOTE_GAIN,
       blending: AdditiveBlending,
       depthWrite: false,
       side: DoubleSide,
     }),
   );
+  // Dust moves through the whole shaft, outside the pad bounds.
+  mesh.frustumCulled = false;
+  const paintDust = (time: number): void => {
+    const position = mesh.geometry.getAttribute("position");
+    const color = mesh.geometry.getAttribute("color");
+    if (!position || !color) return;
+    paintMotes(
+      position.array as Float32Array,
+      color.array as Float32Array,
+      columnBodyFloats(),
+      time,
+      MOTE_RGB,
+    );
+    position.needsUpdate = true;
+    color.needsUpdate = true;
+  };
+  paintDust(0);
+  const rise = mesh.onBeforeRender;
+  const paintFrame: Mesh["onBeforeRender"] = (...args) => {
+    rise(...args);
+    paintDust(performance.now() / 1000);
+  };
+  mesh.onBeforeRender = paintFrame;
   return { mesh, triangles: columnFloatCount() / 9 };
 }
 
