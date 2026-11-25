@@ -10,7 +10,15 @@ import {
   WISP_WAVE1_BURST_GAP,
   WISP_WAVE1_SPAWN_GRACE,
 } from "../src/wisp.ts";
-import { judgeHeldFire, judgeReload, settleSimVerdict } from "./smoke-fire.ts";
+import {
+  FORWARD_MOVE_METERS,
+  judgeForwardMove,
+  judgeHeldFire,
+  judgeLookLeftSpawn,
+  judgeReload,
+  judgeWave3Bolts,
+  settleSimVerdict,
+} from "./smoke-fire.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const host = "127.0.0.1";
@@ -712,6 +720,81 @@ function readQuillAction(kind) {
   };
 }
 
+// Release in this turn. The well ammo pad is a few meters north, and a 200 ms
+// frame would otherwise keep W down until the runner notices and walk the body
+// onto that pad before the fire check.
+function readForwardMove({ startZ, meters }) {
+  const text = document.querySelector("#fps-readout")?.textContent ?? "";
+  const match = /pos (-?\d+\.\d+) (-?\d+\.\d+) (-?\d+\.\d+)/.exec(text);
+  const z = match ? Number(match[3]) : Number.NaN;
+  if (Number.isFinite(startZ) && Number.isFinite(z) && startZ - z > meters) {
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true }));
+  }
+  const canvas = document.querySelector("canvas");
+  const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+  return {
+    sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+    z,
+    hp: Number(document.querySelector("#hud-hp")?.textContent ?? "NaN"),
+    phase: document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "",
+  };
+}
+
+function readLook() {
+  const canvas = document.querySelector("canvas");
+  const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+  const view = canvas instanceof HTMLCanvasElement ? canvas.fragView : null;
+  return {
+    sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+    yaw: typeof view?.yaw === "number" ? view.yaw : Number.NaN,
+    pitch: typeof view?.pitch === "number" ? view.pitch : Number.NaN,
+  };
+}
+
+function readWave3() {
+  const run = window.__fragRun;
+  const player = window.__fragPlayer;
+  const canvas = document.querySelector("canvas");
+  if (!run || !player || !(canvas instanceof HTMLCanvasElement) || run.snapshot == null) {
+    return {
+      sim: Number.NaN,
+      wave: Number.NaN,
+      count: Number.NaN,
+      enforcerAlive: Number.NaN,
+      bolts: Number.NaN,
+      calls: 0,
+      triangles: 0,
+      lines: 0,
+      points: 0,
+      geometries: 0,
+      textures: 0,
+      ready: false,
+    };
+  }
+  player.set({ hp: 100, armor: 0 });
+  let snap = run.snapshot;
+  if (snap.wave < 3 && snap.phase === "fighting" && snap.count > 0) {
+    run.killAlive();
+    snap = run.snapshot;
+  }
+  const stats = canvas.fragStats;
+  const sim = canvas.fragSim;
+  return {
+    sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+    wave: snap.wave,
+    count: snap.count,
+    enforcerAlive: snap.enforcerAlive,
+    bolts: snap.bolts,
+    calls: stats?.calls ?? 0,
+    triangles: stats?.triangles ?? 0,
+    lines: stats?.lines ?? 0,
+    points: stats?.points ?? 0,
+    geometries: stats?.geometries ?? 0,
+    textures: stats?.textures ?? 0,
+    ready: true,
+  };
+}
+
 async function assertQuillFire(page, errors) {
   const ammoText = () => page.locator("#hud-ammo").innerText();
   const before = (await ammoText()).trim();
@@ -1031,34 +1114,40 @@ async function assertShellFlow(page, errors) {
     if (!match) return null;
     return { x: Number(match[1]), y: Number(match[2]), z: Number(match[3]) };
   };
-  const beforeMove = poseOf(await page.locator("#fps-readout").innerText());
+  const yawOf = (text) => {
+    const match = /yaw (-?\d+\.\d+)/.exec(text ?? "");
+    return match ? Number(match[1]) : Number.NaN;
+  };
+  const beforeText = await page.locator("#fps-readout").innerText();
+  const beforeMove = poseOf(beforeText);
+  const beforeYaw = yawOf(beforeText);
   if (!beforeMove) {
     errors.push("debug readout has no position before moving");
   } else {
     const locked = await page.evaluate(() => document.pointerLockElement != null);
     if (!locked) errors.push("pointer did not lock; movement keys are not sampled");
     await page.keyboard.down("KeyW");
+    const moveWall = Date.now();
+    let moveStartSim = Number.NaN;
     try {
-      await page.waitForFunction(
-        (startZ) => {
-          const text = document.querySelector("#fps-readout")?.textContent ?? "";
-          const match = /pos (-?\d+\.\d+) (-?\d+\.\d+) (-?\d+\.\d+)/.exec(text);
-          if (!match) return false;
-          const moved = startZ - Number(match[3]) > 1;
-          // Release in this turn. The well ammo pad is a few meters north, and
-          // a 200 ms frame would otherwise keep W down until the runner
-          // notices and walk the body onto that pad before the fire check.
-          if (moved) {
-            window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true }));
-          }
-          return moved;
+      const moved = await settleSimVerdict({
+        read: () => page.evaluate(readForwardMove, { startZ: beforeMove.z, meters: FORWARD_MOVE_METERS }),
+        judge: (live) => {
+          if (!Number.isFinite(moveStartSim)) moveStartSim = live.sim;
+          return judgeForwardMove({ sim: moveStartSim, z: beforeMove.z, yaw: beforeYaw }, live);
         },
-        beforeMove.z,
-        { timeout: 20_000, polling: 250 },
-      );
+      });
+      if (moved.verdict.state !== "pass") {
+        const reason = moved.verdict.state === "fail" ? moved.verdict.reason : "move sample missing";
+        errors.push(`holding W did not move forward (${reason})`);
+      } else if (moved.sample) {
+        console.log(
+          `holding W: z ${beforeMove.z.toFixed(2)} -> ${moved.sample.z.toFixed(2)} yaw ${beforeYaw.toFixed(1)} in ${Date.now() - moveWall}ms wall (${(moved.sample.sim - moveStartSim).toFixed(3)}s sim)`,
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
-      errors.push(`holding W did not move forward within 20s: ${message}`);
+      errors.push(`holding W did not move forward (${message})`);
     } finally {
       await page.keyboard.up("KeyW");
     }
@@ -1304,10 +1393,7 @@ async function runDevSmoke(browser, errors) {
       await page.locator("canvas").click({ force: true });
     }
 
-    const pitched = await page.evaluate(() => {
-      const canvas = document.querySelector("canvas");
-      return canvas instanceof HTMLCanvasElement ? { yaw: canvas.fragView?.yaw, pitch: canvas.fragView?.pitch } : null;
-    });
+    const pitched = await page.evaluate(readLook);
     const session = await page.context().newCDPSession(page);
     await session.send("Input.dispatchMouseEvent", {
       type: "mouseMoved",
@@ -1317,34 +1403,22 @@ async function runDevSmoke(browser, errors) {
       movementY: -400,
     });
     await session.detach();
-    let looked = null;
-    try {
-      await page.waitForFunction(
-        () => {
-          const canvas = document.querySelector("canvas");
-          if (!(canvas instanceof HTMLCanvasElement) || canvas.fragView == null) return false;
-          return Math.abs(canvas.fragView.pitch) > 15 || Math.abs(canvas.fragView.yaw) > 5;
-        },
-        undefined,
-        { timeout: 3_000, polling: 50 },
-      );
-      looked = await page.evaluate(() => {
-        const canvas = document.querySelector("canvas");
-        return canvas instanceof HTMLCanvasElement
-          ? { yaw: canvas.fragView?.yaw ?? null, pitch: canvas.fragView?.pitch ?? null }
-          : null;
-      });
-    } catch {
-      looked = await page.evaluate(() => {
-        const canvas = document.querySelector("canvas");
-        return canvas instanceof HTMLCanvasElement
-          ? { yaw: canvas.fragView?.yaw ?? null, pitch: canvas.fragView?.pitch ?? null }
-          : null;
-      });
-    }
+    // The look is sampled on a later sim frame. A software-GL frame can block
+    // for longer than 3 s of wall time, so the old deadline expired while the
+    // move was still queued.
+    let lookStartSim = Number.NaN;
+    const turned = await settleSimVerdict({
+      read: () => page.evaluate(readLook),
+      judge: (live) => {
+        if (!Number.isFinite(lookStartSim)) lookStartSim = live.sim;
+        return judgeLookLeftSpawn({ sim: lookStartSim }, live);
+      },
+    });
+    const looked = turned.sample;
     console.log(`restart facing before death: spawn ${JSON.stringify(pitched)} looked ${JSON.stringify(looked)}`);
-    if (!looked || !(Math.abs(looked.pitch ?? 0) > 15 || Math.abs(looked.yaw ?? 0) > 5)) {
-      errors.push(`mouse did not leave spawn facing before restart (${JSON.stringify(looked)})`);
+    if (turned.verdict.state !== "pass") {
+      const reason = turned.verdict.state === "fail" ? turned.verdict.reason : "look sample missing";
+      errors.push(`mouse did not leave spawn facing before restart (${reason})`);
     }
 
     const granted = await page.evaluate(() => {
@@ -1473,49 +1547,26 @@ async function runDevSmoke(browser, errors) {
     }
 
     let report = null;
+    const waveWall = Date.now();
+    let waveStartSim = Number.NaN;
     try {
-      const handle = await page.waitForFunction(
-        () => {
-          const run = window.__fragRun;
-          const player = window.__fragPlayer;
-          const canvas = document.querySelector("canvas");
-          if (!run || !player || !(canvas instanceof HTMLCanvasElement)) return false;
-          player.set({ hp: 100, armor: 0 });
-          let snap = run.snapshot;
-          if (snap.wave < 3 && snap.phase === "fighting" && snap.count > 0) {
-            run.killAlive();
-            snap = run.snapshot;
-          }
-          const stats = canvas.fragStats;
-          if (
-            !(
-              snap.wave >= 3 &&
-              snap.count === 4 &&
-              snap.enforcerAlive === 2 &&
-              snap.bolts > 0 &&
-              stats &&
-              stats.calls > 0
-            )
-          ) {
-            return false;
-          }
-          return {
-            calls: stats.calls,
-            triangles: stats.triangles,
-            lines: stats.lines,
-            points: stats.points,
-            geometries: stats.geometries,
-            textures: stats.textures,
-            wave: snap.wave,
-            count: snap.count,
-            enforcerAlive: snap.enforcerAlive,
-            bolts: snap.bolts,
-          };
+      const fielded = await settleSimVerdict({
+        read: () => page.evaluate(readWave3),
+        judge: (live) => {
+          if (!Number.isFinite(waveStartSim)) waveStartSim = live.sim;
+          return judgeWave3Bolts({ sim: waveStartSim }, live);
         },
-        undefined,
-        { timeout: 25_000, polling: 50 },
-      );
-      report = await handle.jsonValue();
+      });
+      if (fielded.verdict.state !== "pass" || !fielded.sample) {
+        const snap = await page.evaluate(() => window.__fragRun?.snapshot ?? null);
+        const reason = fielded.verdict.state === "fail" ? fielded.verdict.reason : "wave sample missing";
+        errors.push(`dev wave 3 did not field 4 drones and 2 enforcers (${JSON.stringify(snap)}): ${reason}`);
+      } else {
+        report = fielded.sample;
+        console.log(
+          `wave 3 bolts in ${Date.now() - waveWall}ms wall (${(report.sim - waveStartSim).toFixed(3)}s sim)`,
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
       const snap = await page.evaluate(() => window.__fragRun?.snapshot ?? null);
@@ -1786,6 +1837,9 @@ async function assertPauseResume(browser, errors) {
   noteConsole(page, errors, "pause resume");
   try {
     await page.goto(`${origin}/`, { waitUntil: "load", timeout: 20_000 });
+    // The canvas node is appended while the WebGL context is created, before
+    // play starts and before fragSim exists. This is page load, not sim
+    // progress, so the bound stays a wall stall guard.
     await page.waitForSelector("canvas", { timeout: 30_000 });
     await page.locator("#content-warning-continue").click();
     await page.locator("#click-to-play").click();
