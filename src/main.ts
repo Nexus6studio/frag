@@ -85,9 +85,13 @@ const hear = (event: SimEvent): void => {
   if (event.type === "enemy-hit") feedback.noteHit(false);
   else if (event.type === "enemy-kill") feedback.noteHit(true);
 };
+let playerDead = (): boolean => false;
 const shell = mountShell(renderer.domElement, {
   onGesture() {
     audio.prime();
+  },
+  dead() {
+    return playerDead();
   },
   onMute() {
     audio.prime();
@@ -110,6 +114,7 @@ const benchHp = (window as Window & { __fragBenchHp?: unknown }).__fragBenchHp;
 const player = createPlayerState(
   typeof benchHp === "number" && Number.isFinite(benchHp) && benchHp > 0 ? { hp: benchHp } : undefined,
 );
+playerDead = () => player.get().hp <= 0;
 let heardHp = player.get().hp;
 player.subscribe((state) => {
   if (hurtFromVitals(heardHp, state.hp)) hear({ type: "player-hurt" });
