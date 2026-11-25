@@ -16,6 +16,7 @@ export type SimEvent =
   | { type: "enemy-kill" }
   | { type: "wisp-shot" }
   | { type: "enforcer-shot" }
+  | { type: "rusher-windup" }
   | { type: "pickup"; kind: "health" | "armor" | "ammo" }
   | { type: "player-hurt" }
   | { type: "jump-pad" };
@@ -32,6 +33,7 @@ export type CueId =
   | "kill"
   | "wisp"
   | "enforcer"
+  | "rusher"
   | "health"
   | "armor"
   | "ammo"
@@ -64,6 +66,8 @@ export function cueFor(event: SimEvent): CueId {
       return "wisp";
     case "enforcer-shot":
       return "enforcer";
+    case "rusher-windup":
+      return "rusher";
     case "pickup":
       return event.kind;
     case "player-hurt":

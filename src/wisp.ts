@@ -879,9 +879,20 @@ const RUN_DEBUG_KEY = "__fragRun";
 
 export function exposeRunDebug(
   target: object,
-  sim: { killAlive(): void; snapshot(): object; poseLunge?: () => void; faceSpawn?: () => void },
+  sim: {
+    killAlive(): void;
+    snapshot(): object;
+    poseLunge?: () => void;
+    poseWindup?: (ahead?: number) => void;
+    parkWindup?: (ahead?: number) => void;
+    clearShowcase?: () => void;
+    faceSpawn?: () => void;
+  },
 ): void {
   const pose = sim.poseLunge;
+  const windup = sim.poseWindup;
+  const park = sim.parkWindup;
+  const clear = sim.clearShowcase;
   const face = sim.faceSpawn;
   Object.defineProperty(target, RUN_DEBUG_KEY, {
     configurable: true,
@@ -895,6 +906,15 @@ export function exposeRunDebug(
       },
       poseLunge(): void {
         pose?.();
+      },
+      poseWindup(ahead?: number): void {
+        windup?.(ahead);
+      },
+      parkWindup(ahead?: number): void {
+        park?.(ahead);
+      },
+      clearShowcase(): void {
+        clear?.();
       },
       faceSpawn(): void {
         face?.();

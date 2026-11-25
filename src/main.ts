@@ -307,8 +307,54 @@ if (import.meta.env.DEV) {
         yawRad + Math.PI,
       );
     },
+    parkWindup(ahead?: number): void {
+      parkWindupView(ahead);
+    },
+    poseWindup(ahead?: number): void {
+      const distance = parkWindupView(ahead);
+      const yawRad = (look.yaw * Math.PI) / 180;
+      const feet = mover.state.position;
+      const fx = -Math.sin(yawRad);
+      const fz = -Math.cos(yawRad);
+      const rx = Math.cos(yawRad);
+      const rz = -Math.sin(yawRad);
+      rushers.poseWindup(
+        {
+          x: feet.x + fx * distance,
+          y: feet.y,
+          z: feet.z + fz * distance,
+        },
+        yawRad + Math.PI,
+      );
+      // A companion stands off to the right so the flash can be judged next to
+      // another body. Close uses the south concourse; mid range steps west and
+      // looks along it, because straight ahead is the well.
+      const side = distance >= 6 ? 1.8 : 1.35;
+      const depth = distance >= 6 ? distance - 0.8 : 2.05;
+      enforcers.place(0, {
+        x: feet.x + fx * depth + rx * side,
+        y: feet.y,
+        z: feet.z + fz * depth + rz * side,
+      });
+    },
+    clearShowcase(): void {
+      rushers.clearShowcase();
+    },
   };
   exposeRunDebug(window, runDebug);
+
+  function parkWindupView(ahead?: number): number {
+    const distance = typeof ahead === "number" && Number.isFinite(ahead) && ahead > 0 ? ahead : 1.45;
+    if (distance < 6) return distance;
+    mover.state.position.x = -8;
+    mover.state.position.y = ATRIUM_SPAWN.y;
+    mover.state.position.z = ATRIUM_SPAWN.z;
+    mover.state.velocity.x = 0;
+    mover.state.velocity.y = 0;
+    mover.state.velocity.z = 0;
+    look.setYaw(-90);
+    return distance;
+  }
 }
 
 function resize(): void {

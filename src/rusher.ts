@@ -1,9 +1,13 @@
 // Cyber-Ganger Rusher. A fictional street-gang flanker, not a person.
 //
 // 35 HP, no armor. It stays on the ground, walks at 6.4 m/s, and climbs the
-// same ramps and stairs as the enforcer. Inside 2.2 m it holds for a 0.25 s
-// telegraph, then lunges for 14 melee damage. The next telegraph waits out
-// a 0.85 s cooldown. Spawn grace is 2 s: it may close, and it does not swing.
+// same ramps and stairs as the enforcer. Inside 2.2 m it holds for a 0.40 s
+// windup, then lunges for 12 melee damage. The windup is the tell: the view
+// flashes the body and a procedural cue plays once. The 1.4 s cooldown starts
+// when the lunge resolves. Only one rusher in the fight may be winding up or
+// lunging, and a different rusher's lunge waits 0.5 s after the previous one
+// ends. Strafing out of the 2.2 m reach during the windup makes the lunge miss.
+// Spawn grace is 2 s: it may close, and it does not swing.
 //
 // Death uses the same fictional blood, gibs, and decals as the enforcer.
 // The player, the pads, and the props do not gib.
@@ -43,9 +47,16 @@ export const RUSHER_HP = 35;
 export const RUSHER_ARMOR = 0;
 export const RUSHER_SPEED = 6.4;
 export const RUSHER_RANGE = 2.2;
-export const RUSHER_DAMAGE = 14;
-export const RUSHER_COOLDOWN = 0.85;
-export const RUSHER_TELEGRAPH = 0.25;
+export const RUSHER_DAMAGE = 12;
+/** Starts when the lunge resolves, not when it begins. */
+export const RUSHER_COOLDOWN = 1.4;
+/** Windup. The body flashes and one cue plays; the dash has not started. */
+export const RUSHER_TELEGRAPH = 0.4;
+/**
+ * Quiet between lunges of different rushers. Measured from the end of one
+ * dash to the start of the next. Windup and the dash itself stay exclusive.
+ */
+export const RUSHER_LUNGE_GAP = 0.5;
 /** The dash itself. Damage lands on the first slice, then the trail follows. */
 export const RUSHER_LUNGE = 0.18;
 export const RUSHER_LUNGE_SPEED = 9.2;
@@ -107,6 +118,10 @@ export interface RusherSim {
   place(index: number, feet: Vec3): void;
   /** Dev capture. Holds one rusher mid-lunge so a frame can see the blade trail. */
   poseLunge(at: Vec3, yaw: number): void;
+  /** Dev capture. Holds one rusher at the bright point of the windup tell. */
+  poseWindup(at: Vec3, yaw: number): void;
+  /** Dev capture. Drops a posed rusher so the next pose has an empty foreground. */
+  clearShowcase(): void;
   lungeCount(): number;
   lungeTime(index: number): number;
   snapshot(): RusherSnapshot;
@@ -181,6 +196,21 @@ export function createRusherSim(options: RusherOptions): RusherSim {
   const lungeTimes = new Float64Array(LUNGE_RECORD);
   let time = 0;
   let lunges = 0;
+  /** Index of the rusher in windup or mid-lunge. -1 when the token is free. */
+  let token = -1;
+  /** Earliest sim time a lunge dash may begin. */
+  let lungeGate = 0;
+
+  function releaseToken(unit: Unit): void {
+    if (token === unit.index) token = -1;
+  }
+
+  function claimWindup(unit: Unit): boolean {
+    if (token !== -1) return false;
+    if (time + RUSHER_TELEGRAPH < lungeGate - 1e-8) return false;
+    token = unit.index;
+    return true;
+  }
 
   function applyHit(unit: Unit, amount: number): void {
     if (!unit.alive || !Number.isFinite(amount) || amount <= 0) return;
@@ -198,6 +228,7 @@ export function createRusherSim(options: RusherOptions): RusherSim {
     unit.phase = "hunt";
     unit.swing = 0;
     unit.held = false;
+    releaseToken(unit);
     unit.handle.setActive(false);
     options.onEvent?.({ type: "enemy-kill" });
     gore.burst(unit.position, hull);
@@ -212,6 +243,8 @@ export function createRusherSim(options: RusherOptions): RusherSim {
   }
 
   function spawnCount(count: number, feet: Vec3, occupied?: readonly Vec3[]): void {
+    token = -1;
+    lungeGate = 0;
     const wanted = Math.max(0, Math.min(RUSHER_CAP, Math.floor(count)));
     const points = planSpawns(feet, hull, wanted, occupied ?? []);
     for (let i = 0; i < units.length; i += 1) deactivate(units[i]!);
@@ -223,10 +256,12 @@ export function createRusherSim(options: RusherOptions): RusherSim {
   function place(index: number, feet: Vec3): void {
     const unit = units[index];
     if (!unit) return;
+    releaseToken(unit);
     activate(unit, feet, feet, graceTime);
   }
 
   function poseLunge(at: Vec3, yaw: number): void {
+    token = -1;
     const unit = units[0]!;
     activate(unit, at, at, 0);
     unit.yaw = yaw;
@@ -249,6 +284,30 @@ export function createRusherSim(options: RusherOptions): RusherSim {
       slot.z = at.z - fz * (0.35 + i * 0.28);
     }
     syncChest(unit);
+  }
+
+  function poseWindup(at: Vec3, yaw: number): void {
+    token = -1;
+    const unit = units[0]!;
+    activate(unit, at, at, 0);
+    unit.yaw = yaw;
+    unit.phase = "telegraph";
+    unit.swing = 0;
+    unit.struck = false;
+    unit.held = true;
+    unit.grace = 0;
+    for (let i = 0; i < trails.length; i += 1) trails[i]!.alive = false;
+    syncChest(unit);
+  }
+
+  function clearShowcase(): void {
+    token = -1;
+    for (let i = 0; i < units.length; i += 1) {
+      const unit = units[i]!;
+      if (!unit.held) continue;
+      deactivate(unit);
+    }
+    for (let i = 0; i < trails.length; i += 1) trails[i]!.alive = false;
   }
 
   function update(dt: number, feet: Vec3): void {
@@ -297,17 +356,19 @@ export function createRusherSim(options: RusherOptions): RusherSim {
 
   function advanceSwing(unit: Unit, dt: number, feet: Vec3, world: Hull): void {
     if (unit.grace > 0) {
+      releaseToken(unit);
       unit.phase = "hunt";
       unit.swing = 0;
       return;
     }
     const dist = gap(unit, feet);
     if (unit.phase === "hunt") {
-      if (dist <= RUSHER_RANGE && lineClear(unit, feet, world)) {
+      if (dist <= RUSHER_RANGE && lineClear(unit, feet, world) && claimWindup(unit)) {
         unit.phase = "telegraph";
         unit.swing = 0;
         unit.body.velocity.x = 0;
         unit.body.velocity.z = 0;
+        options.onEvent?.({ type: "rusher-windup" });
       }
       return;
     }
@@ -318,8 +379,11 @@ export function createRusherSim(options: RusherOptions): RusherSim {
       unit.swing = 0;
       unit.struck = false;
       unit.trailMark = -1;
+      lungeGate = time + RUSHER_LUNGE + RUSHER_LUNGE_GAP;
     }
     if (unit.phase === "lunge") {
+      // One check, on the frame the windup resolves. Leaving the 2.2 m reach
+      // during the windup is a miss, and the dash does not strike again.
       if (!unit.struck) {
         unit.struck = true;
         if (gap(unit, feet) <= RUSHER_RANGE && lineClear(unit, feet, world)) connect(unit);
@@ -332,6 +396,7 @@ export function createRusherSim(options: RusherOptions): RusherSim {
       if (unit.swing + 1e-8 < RUSHER_LUNGE) return;
       unit.phase = "recover";
       unit.swing = 0;
+      releaseToken(unit);
       return;
     }
     if (unit.swing + 1e-8 >= RUSHER_COOLDOWN) {
@@ -439,6 +504,8 @@ export function createRusherSim(options: RusherOptions): RusherSim {
     spawnCount,
     place,
     poseLunge,
+    poseWindup,
+    clearShowcase,
     lungeCount(): number {
       return lunges;
     },

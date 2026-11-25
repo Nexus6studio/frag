@@ -10,14 +10,25 @@ import {
 import { createFight } from "../src/fight.ts";
 import { GORE_GIBS_PER_DEATH, GORE_SPRAY_PER_DEATH } from "../src/gore.ts";
 import { createHitboxWorld } from "../src/hitbox.ts";
+import { GROUND_WISH_SPEED } from "../src/move.ts";
 import { createPlayerState } from "../src/player/state.ts";
 import { QUILL_BURST, QUILL_BURST_DAMAGE, QUILL_CHARGE, QUILL_DAMAGE, createQuill } from "../src/quill.ts";
+import { ENFORCER_DAMAGE } from "../src/enforcer.ts";
+import {
+  RUSHER_WINDUP_CAP,
+  RUSHER_WINDUP_EMISSIVE,
+  rusherWindupAmount,
+  rusherWindupColor,
+} from "../src/rusher-view.ts";
+import { WISP_BOLT_DAMAGE } from "../src/wisp.ts";
 import {
   RUSHER_ARMOR,
   RUSHER_COOLDOWN,
   RUSHER_DAMAGE,
   RUSHER_GRACE,
   RUSHER_HP,
+  RUSHER_LUNGE,
+  RUSHER_LUNGE_GAP,
   RUSHER_RANGE,
   RUSHER_SEPARATION,
   RUSHER_SPEED,
@@ -115,44 +126,251 @@ test("one alt-fire burst of 18-damage flechettes kills a rusher", () => {
   assert.equal(sim.units[0].alive, false);
 });
 
-test("a rusher lunges only inside 2.2 m, after a 0.25 s telegraph, then waits 0.85 s", () => {
+test("a rusher lunges only inside 2.2 m, after a 0.40 s windup, then waits 1.4 s", () => {
+  assert.equal(RUSHER_HP, 35);
+  assert.equal(RUSHER_SPEED, 6.4);
+  assert.equal(RUSHER_RANGE, 2.2);
+  assert.equal(RUSHER_GRACE, 2);
+  assert.equal(RUSHER_DAMAGE, 12);
+  assert.equal(RUSHER_COOLDOWN, 1.4);
+  assert.equal(RUSHER_TELEGRAPH, 0.4);
+  assert.equal(RUSHER_LUNGE_GAP, 0.5);
+  assert.equal(QUILL_DAMAGE, 9);
+  assert.equal(QUILL_BURST_DAMAGE, 18);
+
   const hull = openHull();
   const player = createPlayerState();
   const far = { x: 0, y: 0, z: -(RUSHER_RANGE + 0.35) };
   const sim = createRusherSim({ hull, player, hitboxes: createHitboxWorld(), grace: 0 });
   sim.place(0, { x: 0, y: 0, z: 0 });
   step(sim, 0.2, far);
-  assert.equal(sim.units[0].phase, "hunt", "telegraph started outside melee range");
+  assert.equal(sim.units[0].phase, "hunt", "windup started outside melee range");
   assert.equal(player.get().hp, 100);
   assert.equal(sim.lungeCount(), 0);
 
+  const events = [];
   const close = createPlayerState();
-  const melee = createRusherSim({ hull, player: close, hitboxes: createHitboxWorld(), grace: 0 });
+  const melee = createRusherSim({
+    hull,
+    player: close,
+    hitboxes: createHitboxWorld(),
+    grace: 0,
+    onEvent: (event) => events.push(event.type),
+  });
   melee.place(0, { x: 0, y: 0, z: 0 });
   const feet = { x: 0, y: 0, z: -1.2 };
   step(melee, RUSHER_TELEGRAPH - 0.02, feet);
   assert.equal(melee.units[0].phase, "telegraph");
-  assert.equal(close.get().hp, 100, "the telegraph dealt damage");
+  assert.equal(close.get().hp, 100, "the windup dealt damage");
   assert.equal(melee.lungeCount(), 0);
+  assert.equal(events.filter((type) => type === "rusher-windup").length, 1);
   step(melee, 0.04, feet);
   assert.equal(melee.lungeCount(), 1);
   assert.equal(close.get().hp, 100 - RUSHER_DAMAGE);
   assert.equal(melee.units[0].phase, "lunge");
   assert.ok(melee.trails.some((slot) => slot.alive), "the lunge had no trail");
+  assert.equal(events.filter((type) => type === "rusher-windup").length, 1, "the cue repeated during the dash");
   const first = melee.lungeTime(0);
   assert.ok(first >= RUSHER_TELEGRAPH - DT, `lunge at ${first}`);
 
   step(melee, RUSHER_COOLDOWN, feet);
   assert.equal(melee.lungeCount(), 1, "cooldown ignored");
+  assert.equal(melee.units[0].phase, "recover", "cooldown started before the lunge resolved");
   step(melee, RUSHER_TELEGRAPH + 0.2, feet);
   assert.equal(melee.lungeCount(), 2);
   const gap = melee.lungeTime(1) - melee.lungeTime(0);
-  assert.ok(gap >= RUSHER_LUNGE_GAP(), `lunges ${gap.toFixed(3)} s apart`);
+  assert.ok(
+    gap >= RUSHER_LUNGE + RUSHER_COOLDOWN + RUSHER_TELEGRAPH - 0.05,
+    `lunges ${gap.toFixed(3)} s apart`,
+  );
 });
 
-function RUSHER_LUNGE_GAP() {
-  return RUSHER_COOLDOWN + RUSHER_TELEGRAPH - 0.05;
-}
+test("strafing at run speed during the windup makes the lunge miss", () => {
+  const hull = openHull();
+  const still = createPlayerState();
+  const hit = createRusherSim({ hull, player: still, hitboxes: createHitboxWorld(), grace: 0 });
+  hit.place(0, { x: 0, y: 0, z: 0 });
+  const planted = { x: 0, y: 0, z: -1.4 };
+  step(hit, RUSHER_TELEGRAPH + 0.05, planted);
+  assert.equal(still.get().hp, 100 - RUSHER_DAMAGE);
+  assert.equal(hit.lungeCount(), 1);
+
+  const player = createPlayerState();
+  const sim = createRusherSim({ hull, player, hitboxes: createHitboxWorld(), grace: 0 });
+  sim.place(0, { x: 0, y: 0, z: 0 });
+  let t = 0;
+  while (t < RUSHER_TELEGRAPH + 0.08) {
+    const feet = { x: GROUND_WISH_SPEED * t, y: 0, z: -1.4 };
+    sim.update(DT, feet);
+    t += DT;
+  }
+  const away = Math.hypot(GROUND_WISH_SPEED * RUSHER_TELEGRAPH, 1.4);
+  assert.ok(away > RUSHER_RANGE, `strafe ${away.toFixed(2)} m stayed in reach`);
+  assert.equal(player.get().hp, 100);
+  assert.equal(player.get().armor, 0);
+  assert.equal(sim.lungeCount(), 0);
+  assert.ok(
+    sim.units[0].phase === "lunge" || sim.units[0].phase === "recover",
+    `windup cancelled instead of missing (${sim.units[0].phase})`,
+  );
+});
+
+test("only one rusher winds up or lunges, with 0.5 s between different lunges", () => {
+  const hull = openHull();
+  const player = createPlayerState({ hp: 500, armor: 0 });
+  const events = [];
+  const sim = createRusherSim({
+    hull,
+    player,
+    hitboxes: createHitboxWorld(),
+    grace: 0,
+    onEvent: (event) => events.push(event.type),
+  });
+  sim.place(0, { x: 0, y: 0, z: 0 });
+  sim.place(1, { x: 1.2, y: 0, z: 0 });
+  let overlap = 0;
+  const starts = [[], []];
+  const ends = [[], []];
+  const prev = ["hunt", "hunt"];
+  let t = 0;
+  while (t < 3.5) {
+    const a = sim.units[0].position;
+    const b = sim.units[1].position;
+    const feet = { x: (a.x + b.x) / 2, y: 0, z: (a.z + b.z) / 2 };
+    sim.update(DT, feet);
+    t += DT;
+    let busy = 0;
+    for (let i = 0; i < 2; i += 1) {
+      const phase = sim.units[i].phase;
+      if (phase === "telegraph" || phase === "lunge") busy += 1;
+      if (phase === "lunge" && prev[i] !== "lunge") starts[i].push(sim.time);
+      if (prev[i] === "lunge" && phase !== "lunge") ends[i].push(sim.time);
+      prev[i] = phase;
+    }
+    if (busy > overlap) overlap = busy;
+  }
+  assert.equal(overlap, 1, "two rushers were in windup or mid-lunge together");
+  assert.ok(starts[0].length >= 1 && starts[1].length >= 1, `lunges ${starts[0].length} and ${starts[1].length}`);
+  const order = [];
+  for (let i = 0; i < 2; i += 1) {
+    for (const at of starts[i]) order.push({ i, at, kind: "start" });
+    for (const at of ends[i]) order.push({ i, at, kind: "end" });
+  }
+  order.sort((p, q) => p.at - q.at);
+  let lastEnd = null;
+  let lastStart = null;
+  for (const mark of order) {
+    if (mark.kind === "end") lastEnd = mark;
+    if (mark.kind !== "start" || !lastStart) {
+      if (mark.kind === "start") lastStart = mark;
+      continue;
+    }
+    if (mark.i !== lastStart.i) {
+      assert.ok(mark.at - lastStart.at >= RUSHER_LUNGE_GAP - 1e-4, `lunge starts ${mark.at - lastStart.at} s apart`);
+      assert.ok(lastEnd && mark.at - lastEnd.at >= RUSHER_LUNGE_GAP - DT, `gap after a lunge ${mark.at - (lastEnd?.at ?? 0)}`);
+    }
+    lastStart = mark;
+  }
+  assert.ok(events.filter((type) => type === "rusher-windup").length >= 2);
+});
+
+test("the windup flash stays on the body and under the bloom threshold", () => {
+  assert.ok(RUSHER_WINDUP_CAP < 0.88, `cap ${RUSHER_WINDUP_CAP} reaches the bloom extract`);
+  const cloth = [0.09, 0.1, 0.13];
+  const blade = [1, 0.9, 1];
+  for (const swing of [0, 0.05, 0.2, 0.4]) {
+    const amount = rusherWindupAmount(swing);
+    assert.ok(amount > 0.7 && amount <= 1, `amount ${amount}`);
+    for (const vertex of [cloth, blade]) {
+      const color = rusherWindupColor(vertex, swing);
+      for (let channel = 0; channel < 3; channel += 1) {
+        const added = vertex[channel] + amount * RUSHER_WINDUP_EMISSIVE[channel];
+        assert.equal(color[channel], Math.min(added, RUSHER_WINDUP_CAP));
+        assert.ok(color[channel] <= RUSHER_WINDUP_CAP);
+      }
+    }
+    const lit = rusherWindupColor(cloth, swing);
+    assert.ok(lit[0] > 0.55, `cloth red ${lit[0]} is too dim to read`);
+    assert.ok(lit[1] < lit[0] * 0.55, `cloth reads white (${lit.join(", ")})`);
+  }
+});
+
+test("an idle player at 100 HP and 0 armor survives the wave 4 roster for at least 5.5 s", () => {
+  const hull = createAtriumHull();
+  const player = createPlayerState();
+  const fight = createFight({
+    hull,
+    player,
+    hitboxes: createHitboxWorld(),
+    origin: ATRIUM_SPAWN,
+  });
+  const feet = { x: ATRIUM_SPAWN.x, y: ATRIUM_SPAWN.y, z: ATRIUM_SPAWN.z };
+
+  function clearWave() {
+    fight.killAll();
+    let gap = 0;
+    const wave = fight.wisps.wave;
+    while (fight.wisps.wave === wave && gap < WAVE_GAP_SECONDS + 0.5) {
+      fight.update(DT, feet);
+      gap += DT;
+    }
+  }
+
+  clearWave();
+  clearWave();
+  clearWave();
+  assert.equal(fight.wisps.wave, 4);
+  assert.equal(fight.wisps.aliveCount(), 4);
+  assert.equal(fight.enforcers.aliveCount(), 2);
+  assert.equal(fight.rushers.aliveCount(), 2);
+  assert.equal(player.get().hp, 100);
+  assert.equal(player.get().armor, 0);
+
+  let t = DT;
+  let drone = 0;
+  let enforcer = 0;
+  let rusher = 0;
+  let hits = fight.wisps.snapshot().hits;
+  let houndHits = fight.enforcers.snapshot().hits;
+  let lunges = fight.rushers.lungeCount();
+  let hp = player.get().hp;
+  while (hp > 0 && t < 45) {
+    fight.update(DT, feet);
+    t += DT;
+    const nextHp = player.get().hp;
+    const nextHits = fight.wisps.snapshot().hits;
+    const nextHoundHits = fight.enforcers.snapshot().hits;
+    const nextLunges = fight.rushers.lungeCount();
+    let left = hp - nextHp;
+    const take = (count, amount) => {
+      let dealt = 0;
+      for (let i = 0; i < count && left > 0; i += 1) {
+        const hit = Math.min(amount, left);
+        dealt += hit;
+        left -= hit;
+      }
+      return dealt;
+    };
+    // Fight order is drones, then enforcers, then rushers. A killing blow is partial.
+    drone += take(nextHits - hits, WISP_BOLT_DAMAGE);
+    enforcer += take(nextHoundHits - houndHits, ENFORCER_DAMAGE);
+    rusher += take(nextLunges - lunges, RUSHER_DAMAGE);
+    assert.equal(left, 0, `unattributed damage at ${t.toFixed(3)} s`);
+    hits = nextHits;
+    houndHits = nextHoundHits;
+    lunges = nextLunges;
+    hp = nextHp;
+  }
+  console.log(
+    `wave 4 idle survival ${t.toFixed(6)} s (${Math.round(t / DT)} ticks) drone ${drone} enforcer ${enforcer} rusher ${rusher} hp ${hp}`,
+  );
+  assert.equal(hp, 0, `still alive at ${t.toFixed(6)} s`);
+  assert.equal(drone, 80);
+  assert.equal(enforcer, 20);
+  assert.equal(rusher, 0);
+  assert.equal(drone + enforcer + rusher, 100);
+  assert.ok(t >= 5.5, `died at ${t.toFixed(6)} s`);
+});
 
 test("spawn grace blocks the lunge for 2 s", () => {
   const hull = openHull();

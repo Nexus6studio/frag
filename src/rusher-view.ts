@@ -13,6 +13,7 @@ import {
   DoubleSide,
   DynamicDrawUsage,
   Float32BufferAttribute,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
@@ -49,9 +50,54 @@ const HOOD: readonly [number, number, number] = [0.05, 0.05, 0.07];
 const BLADE: readonly [number, number, number] = [1, 0.9, 1];
 const SLIT: readonly [number, number, number] = [1, 0.16, 0.55];
 
+/** Added on top of the body color during windup, then clamped. Linear RGB. */
+export const RUSHER_WINDUP_EMISSIVE: readonly [number, number, number] = [0.7, 0.16, 0.58];
+/**
+ * Cap for the windup flash. The atrium bloom extracts above 0.88, so a body
+ * that stays under this lights up without a halo across the frame.
+ */
+export const RUSHER_WINDUP_CAP = 0.82;
+
+/** 0 hides the flash. 1 is the full emissive add, still clamped by the cap. */
+export function rusherWindupAmount(swing: number): number {
+  const pulse = 0.5 + 0.5 * Math.sin(swing * 48);
+  return 0.72 + pulse * 0.28;
+}
+
+/** Body color during windup. Every channel stays at or under the cap. */
+export function rusherWindupColor(
+  vertex: readonly [number, number, number],
+  swing: number,
+): readonly [number, number, number] {
+  const amount = rusherWindupAmount(swing);
+  return [
+    Math.min(vertex[0] + amount * RUSHER_WINDUP_EMISSIVE[0], RUSHER_WINDUP_CAP),
+    Math.min(vertex[1] + amount * RUSHER_WINDUP_EMISSIVE[1], RUSHER_WINDUP_CAP),
+    Math.min(vertex[2] + amount * RUSHER_WINDUP_EMISSIVE[2], RUSHER_WINDUP_CAP),
+  ];
+}
+
 export function mountRusherView(scene: Scene, sim: RusherSim): { sync(): void } {
   const bodyMat = new MeshBasicMaterial({ vertexColors: true, toneMapped: false, fog: true });
-  const bodyGeom = bodyGeometry();
+  const shellGeom = bodyGeometry();
+  const bodyGeom = shellGeom.clone();
+  const windup = new InstancedBufferAttribute(new Float32Array(RUSHER_CAP), 1);
+  windup.setUsage(DynamicDrawUsage);
+  bodyGeom.setAttribute("windup", windup);
+  bodyMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float windup;\nvarying float vWindup;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWindup = windup;");
+    const add = RUSHER_WINDUP_EMISSIVE.map((channel) => channel.toFixed(3)).join(", ");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying float vWindup;")
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+         diffuseColor.rgb = min(diffuseColor.rgb + vWindup * vec3(${add}), vec3(${RUSHER_WINDUP_CAP.toFixed(3)}));`,
+      );
+  };
+  bodyMat.customProgramCacheKey = () => "rusher-windup-cap";
   const bodies = instanced(bodyGeom, bodyMat, RUSHER_CAP);
   bodies.name = "rusher-body";
 
@@ -63,7 +109,7 @@ export function mountRusherView(scene: Scene, sim: RusherSim): { sync(): void } 
     toneMapped: false,
     fog: false,
   });
-  const shells = instanced(bodyGeom, shellMat, RUSHER_CAP);
+  const shells = instanced(shellGeom, shellMat, RUSHER_CAP);
   shells.name = "rusher-hit-flash";
 
   const trailMat = new MeshBasicMaterial({
@@ -131,10 +177,12 @@ export function mountRusherView(scene: Scene, sim: RusherSim): { sync(): void } 
         if (!unit.alive && !falling) continue;
         const fall = falling ? unit.down / 0.5 : 0;
         placeBody(bodies, shown, unit, fall);
-        tintBody(bodies, shown, unit, sim.time);
+        tintBody(bodies, shown, unit);
+        windup.setX(shown, unit.phase === "telegraph" ? rusherWindupAmount(unit.swing) : 0);
         shown += 1;
       }
       show(bodies, shown);
+      windup.needsUpdate = true;
       if (shown > 0 && bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
 
       let shellCount = 0;
@@ -198,15 +246,9 @@ function placeBody(mesh: InstancedMesh, index: number, unit: RusherUnit, fall: n
   mesh.setMatrixAt(index, _matrix);
 }
 
-function tintBody(mesh: InstancedMesh, index: number, unit: RusherUnit, time: number): void {
-  if (unit.phase === "telegraph") {
-    const pulse = 0.45 + Math.sin(time * 36) * 0.55;
-    _color.setRGB(1, 0.35 + pulse * 0.45, 0.55 + pulse * 0.4);
-  } else if (unit.phase === "lunge") {
-    _color.setRGB(1, 0.82, 1);
-  } else {
-    _color.setRGB(1, 1, 1);
-  }
+function tintBody(mesh: InstancedMesh, index: number, unit: RusherUnit): void {
+  if (unit.phase === "lunge") _color.setRGB(1, 0.82, 1);
+  else _color.setRGB(1, 1, 1);
   mesh.setColorAt(index, _color);
 }
 
