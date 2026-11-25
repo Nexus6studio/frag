@@ -15,7 +15,7 @@
 //
 // Right mouse charges a pierce burst. The charge takes 0.45 s and then fires
 // three flechettes down the same bore. Those three cost 5 magazine rounds.
-// Each deals 9 and can pass through the first enemy to hit the one behind it.
+// Each deals 18 and can pass through the first enemy to hit the one behind it.
 // A second charge waits out a 0.8 s cooldown. Letting go early, or dropping
 // under 5 rounds while the charge is running, aborts it. Reload, and a
 // magazine under 5, will not fire the burst. Left-click stays at eight a second.
@@ -50,8 +50,10 @@ export const QUILL_POOL_CAP = 16;
 export const QUILL_FLASH_SECONDS = 0.045;
 /** Right-click hold before the pierce burst fires. */
 export const QUILL_CHARGE = 0.45;
-/** Flechettes in the charged burst. Each deals QUILL_DAMAGE. */
+/** Flechettes in the charged burst. Each deals QUILL_BURST_DAMAGE. */
 export const QUILL_BURST = 3;
+/** Damage for one charged flechette. Primary shots stay on QUILL_DAMAGE. */
+export const QUILL_BURST_DAMAGE = 18;
 /** Magazine rounds the burst spends. The spine lamp shortens by this many. */
 export const QUILL_BURST_COST = 5;
 /** Seconds after a burst before another charge can start. */
@@ -79,6 +81,8 @@ export interface FlechetteSlot {
   serial: number;
   /** Enemies this spike can still pass through. Primary shots stay at 0. */
   pierce: number;
+  /** Damage applied on each enemy this spike hits. */
+  damage: number;
   /** Enemy already damaged. The next sweep skips that callback. */
   passed: ((damage: number) => void) | null;
   /**
@@ -219,7 +223,13 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
   // -1 means the reload branch should count the whole dt.
   let reloadSlice = -1;
 
-  function fillSlot(command: QuillCommand, time: number, pierce: number, delay: number): boolean {
+  function fillSlot(
+    command: QuillCommand,
+    time: number,
+    pierce: number,
+    delay: number,
+    damage: number,
+  ): boolean {
     const dx = command.direction.x;
     const dy = command.direction.y;
     const dz = command.direction.z;
@@ -253,6 +263,7 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     slot.pierce = pierce;
     slot.passed = null;
     slot.delay = delay;
+    slot.damage = damage;
     birth += 1;
     shotsFired += 1;
     if (recorded < RECORD) {
@@ -268,7 +279,7 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
 
   function shoot(command: QuillCommand, time: number): boolean {
     if (mag <= 0) return false;
-    if (!fillSlot(command, time, 0, 0)) return false;
+    if (!fillSlot(command, time, 0, 0, QUILL_DAMAGE)) return false;
     mag -= 1;
     punch = QUILL_PUNCH_DEG;
     punchAge = 0;
@@ -286,7 +297,7 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
     if (!(Math.hypot(dx, dy, dz) > 1e-8)) return false;
     let spawned = 0;
     for (let i = 0; i < QUILL_BURST; i += 1) {
-      if (fillSlot(command, time, QUILL_PIERCE, delay)) spawned += 1;
+      if (fillSlot(command, time, QUILL_PIERCE, delay, QUILL_BURST_DAMAGE)) spawned += 1;
     }
     if (spawned === 0) return false;
     mag -= QUILL_BURST_COST;
@@ -643,6 +654,7 @@ export function createQuill(options: QuillOptions = {}): QuillDriver {
         slot.passed = null;
         slot.pierce = 0;
         slot.delay = 0;
+        slot.damage = 0;
       }
       publishedMag = -1;
       publishedReserve = -1;
@@ -656,6 +668,7 @@ function endSlot(slot: FlechetteSlot): void {
   slot.passed = null;
   slot.pierce = 0;
   slot.delay = 0;
+  slot.damage = 0;
 }
 
 function stepSlot(slot: FlechetteSlot, dt: number): void {
@@ -717,7 +730,7 @@ function stepSlot(slot: FlechetteSlot, dt: number): void {
     remain -= used;
 
     if (hit) {
-      hit(QUILL_DAMAGE);
+      hit(slot.damage);
       if (slot.pierce > 0) {
         slot.pierce -= 1;
         slot.passed = hit;
@@ -771,6 +784,7 @@ function createSlot(): FlechetteSlot {
     pierce: 0,
     passed: null,
     delay: 0,
+    damage: 0,
   };
 }
 
