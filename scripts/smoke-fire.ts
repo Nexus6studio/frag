@@ -28,6 +28,16 @@ export function reloadBudgetSeconds(): number {
 /** Meters of -Z the smoke walk must cover before it lets go of W. */
 export const FORWARD_MOVE_METERS = 1;
 
+/** Degrees off spawn facing that count as the dev-page mouse move. */
+export const LOOK_YAW_AWAY = 5;
+export const LOOK_PITCH_AWAY = 15;
+
+export function lookLeaveBudgetSeconds(): number {
+  // The move is sampled on a later frame. The frame already in progress can
+  // miss it, so the budget is two clamped steps.
+  return 2 * MAX_FRAME_SECONDS;
+}
+
 export function forwardMoveBudgetSeconds(yawDeg = 0): number {
   // The check wants one meter of -Z. Wish accel is along the facing, so a
   // look that is off spawn-north covers that meter more slowly. Cruise time
@@ -60,6 +70,12 @@ export type MoveSample = {
   z: number;
   hp: number;
   phase: string;
+};
+
+export type LookSample = {
+  sim: number;
+  yaw: number;
+  pitch: number;
 };
 
 export type WaveSample = {
@@ -168,6 +184,25 @@ export function judgeForwardMove(start: { sim: number; z: number; yaw: number },
     return fail(
       "not-moved",
       `forward ${(start.z - sample.z).toFixed(2)} m in ${(sample.sim - start.sim).toFixed(3)}s sim at yaw ${start.yaw.toFixed(1)}`,
+    );
+  }
+  return { state: "pending" };
+}
+
+export function judgeLookLeftSpawn(start: { sim: number }, sample: LookSample): Verdict {
+  if (
+    !Number.isFinite(sample.sim) ||
+    !Number.isFinite(sample.yaw) ||
+    !Number.isFinite(sample.pitch) ||
+    !Number.isFinite(start.sim)
+  ) {
+    return fail("missing", "look sample missing");
+  }
+  if (Math.abs(sample.pitch) > LOOK_PITCH_AWAY || Math.abs(sample.yaw) > LOOK_YAW_AWAY) return { state: "pass" };
+  if (sample.sim - start.sim > lookLeaveBudgetSeconds()) {
+    return fail(
+      "not-turned",
+      `yaw ${sample.yaw.toFixed(1)} pitch ${sample.pitch.toFixed(1)} after ${(sample.sim - start.sim).toFixed(3)}s sim`,
     );
   }
   return { state: "pending" };

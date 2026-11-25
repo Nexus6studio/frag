@@ -13,6 +13,7 @@ import {
   FORWARD_MOVE_METERS,
   judgeForwardMove,
   judgeHeldFire,
+  judgeLookLeftSpawn,
   judgeReload,
   judgeWave3Bolts,
   settleSimVerdict,
@@ -738,6 +739,17 @@ function readForwardMove({ startZ, meters }) {
   };
 }
 
+function readLook() {
+  const canvas = document.querySelector("canvas");
+  const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+  const view = canvas instanceof HTMLCanvasElement ? canvas.fragView : null;
+  return {
+    sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+    yaw: typeof view?.yaw === "number" ? view.yaw : Number.NaN,
+    pitch: typeof view?.pitch === "number" ? view.pitch : Number.NaN,
+  };
+}
+
 function readWave3() {
   const run = window.__fragRun;
   const player = window.__fragPlayer;
@@ -1380,10 +1392,7 @@ async function runDevSmoke(browser, errors) {
       await page.locator("canvas").click({ force: true });
     }
 
-    const pitched = await page.evaluate(() => {
-      const canvas = document.querySelector("canvas");
-      return canvas instanceof HTMLCanvasElement ? { yaw: canvas.fragView?.yaw, pitch: canvas.fragView?.pitch } : null;
-    });
+    const pitched = await page.evaluate(readLook);
     const session = await page.context().newCDPSession(page);
     await session.send("Input.dispatchMouseEvent", {
       type: "mouseMoved",
@@ -1393,34 +1402,22 @@ async function runDevSmoke(browser, errors) {
       movementY: -400,
     });
     await session.detach();
-    let looked = null;
-    try {
-      await page.waitForFunction(
-        () => {
-          const canvas = document.querySelector("canvas");
-          if (!(canvas instanceof HTMLCanvasElement) || canvas.fragView == null) return false;
-          return Math.abs(canvas.fragView.pitch) > 15 || Math.abs(canvas.fragView.yaw) > 5;
-        },
-        undefined,
-        { timeout: 3_000, polling: 50 },
-      );
-      looked = await page.evaluate(() => {
-        const canvas = document.querySelector("canvas");
-        return canvas instanceof HTMLCanvasElement
-          ? { yaw: canvas.fragView?.yaw ?? null, pitch: canvas.fragView?.pitch ?? null }
-          : null;
-      });
-    } catch {
-      looked = await page.evaluate(() => {
-        const canvas = document.querySelector("canvas");
-        return canvas instanceof HTMLCanvasElement
-          ? { yaw: canvas.fragView?.yaw ?? null, pitch: canvas.fragView?.pitch ?? null }
-          : null;
-      });
-    }
+    // The look is sampled on a later sim frame. A software-GL frame can block
+    // for longer than 3 s of wall time, so the old deadline expired while the
+    // move was still queued.
+    let lookStartSim = Number.NaN;
+    const turned = await settleSimVerdict({
+      read: () => page.evaluate(readLook),
+      judge: (live) => {
+        if (!Number.isFinite(lookStartSim)) lookStartSim = live.sim;
+        return judgeLookLeftSpawn({ sim: lookStartSim }, live);
+      },
+    });
+    const looked = turned.sample;
     console.log(`restart facing before death: spawn ${JSON.stringify(pitched)} looked ${JSON.stringify(looked)}`);
-    if (!looked || !(Math.abs(looked.pitch ?? 0) > 15 || Math.abs(looked.yaw ?? 0) > 5)) {
-      errors.push(`mouse did not leave spawn facing before restart (${JSON.stringify(looked)})`);
+    if (turned.verdict.state !== "pass") {
+      const reason = turned.verdict.state === "fail" ? turned.verdict.reason : "look sample missing";
+      errors.push(`mouse did not leave spawn facing before restart (${reason})`);
     }
 
     const granted = await page.evaluate(() => {

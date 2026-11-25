@@ -13,10 +13,14 @@ import {
   HELD_FIRE_ROUNDS,
   forwardMoveBudgetSeconds,
   heldFireBudgetSeconds,
+  LOOK_PITCH_AWAY,
+  LOOK_YAW_AWAY,
   judgeForwardMove,
   judgeHeldFire,
+  judgeLookLeftSpawn,
   judgeReload,
   judgeWave3Bolts,
+  lookLeaveBudgetSeconds,
   reloadBudgetSeconds,
   settleSimVerdict,
   wave3BoltBudgetSeconds,
@@ -378,6 +382,61 @@ function fieldWave(extraFrames) {
   }
   return { verdict, sim, frames };
 }
+
+function lookSample(overrides) {
+  return { sim: 0, yaw: 0, pitch: 0, ...overrides };
+}
+
+test("the look budget is two clamped frames, not a 3 s wall timeout", () => {
+  assert.equal(LOOK_YAW_AWAY, 5);
+  assert.equal(LOOK_PITCH_AWAY, 15);
+  assert.equal(lookLeaveBudgetSeconds(), 2 * MAX_FRAME_SECONDS);
+  assert.ok(lookLeaveBudgetSeconds() < 1);
+});
+
+test("a look that stays on spawn facing fails once two clamped frames have elapsed", () => {
+  const start = { sim: 2 };
+  const early = judgeLookLeftSpawn(start, lookSample({ sim: 2.2 }));
+  assert.equal(early.state, "pending");
+  const late = judgeLookLeftSpawn(start, lookSample({ sim: 2 + lookLeaveBudgetSeconds() + 0.01 }));
+  assert.equal(late.state, "fail");
+  assert.equal(late.code, "not-turned");
+});
+
+test("pitch or yaw past the spawn facing passes before the budget", () => {
+  const start = { sim: 0 };
+  const pitched = judgeLookLeftSpawn(start, lookSample({ sim: 0.1, pitch: -20 }));
+  assert.equal(pitched.state, "pass");
+  const yawed = judgeLookLeftSpawn(start, lookSample({ sim: 0.1, yaw: 6 }));
+  assert.equal(yawed.state, "pass");
+  const inside = judgeLookLeftSpawn(start, lookSample({ sim: 0.1, yaw: LOOK_YAW_AWAY, pitch: LOOK_PITCH_AWAY }));
+  assert.equal(inside.state, "pending");
+});
+
+test("wall time past the old 3s look deadline still passes when a later frame turns", async () => {
+  const frames = [
+    lookSample({ sim: 1, yaw: 0, pitch: 0 }),
+    lookSample({ sim: 1.25, yaw: 0, pitch: 0 }),
+    lookSample({ sim: 1.5, yaw: 10, pitch: -40 }),
+  ];
+  let wall = 0;
+  let index = 0;
+  const result = await settleSimVerdict({
+    now: () => wall,
+    hangMs: 15_000,
+    pollMs: 0,
+    delay: async () => {
+      wall += 4_000;
+    },
+    read: async () => {
+      wall += 4_000;
+      return frames[Math.min(index++, frames.length - 1)];
+    },
+    judge: (live) => judgeLookLeftSpawn({ sim: frames[0].sim }, live),
+  });
+  assert.equal(result.verdict.state, "pass");
+  assert.ok(wall >= 3_000, `wall ${wall}`);
+});
 
 test("the wave 3 budget is two straddled gaps, one late kill, and the first bolt", () => {
   assert.equal(wispSpawnGrace(3), 2);
