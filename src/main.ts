@@ -290,6 +290,9 @@ if (import.meta.env.DEV) {
     faceSpawn(): void {
       look.setSensitivity(0);
       look.reset();
+      // The capture runs on the live dev page, which may be mid-arena after
+      // wave 4. Park on the south concourse so the lunge is in the open view.
+      mover = createAtriumMover(createMoveState(ATRIUM_SPAWN), hearLaunch);
     },
     poseLunge(): void {
       const yawRad = (look.yaw * Math.PI) / 180;

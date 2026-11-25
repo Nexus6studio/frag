@@ -1304,27 +1304,43 @@ async function measureWave4(page, errors) {
   }
 }
 
-async function captureRusherLunge(browser, errors) {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-  noteConsole(page, errors, "rusher");
-  page.on("request", (request) => {
-    const url = request.url();
-    if (url.startsWith(`${devOrigin}/`) || url === devOrigin || url.startsWith("data:")) return;
-    errors.push(`rusher capture unexpected network request: ${url}`);
+function readSimClock() {
+  const canvas = document.querySelector("canvas");
+  const sim = canvas instanceof HTMLCanvasElement ? canvas.fragSim : null;
+  return {
+    sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+    frames: typeof sim?.frames === "number" ? sim.frames : 0,
+  };
+}
+
+/** Wait until the live sim has drawn more frames. A stall is a hang guard, not a navigation deadline. */
+async function waitRenderedFrames(page, count) {
+  const start = await page.evaluate(readSimClock);
+  return settleSimVerdict({
+    hangMs: 45_000,
+    read: () => page.evaluate(readSimClock),
+    judge: (live) => {
+      if (!Number.isFinite(live.sim) || !Number.isFinite(start.sim)) {
+        return { state: "pending" };
+      }
+      if (live.frames >= start.frames + count) return { state: "pass" };
+      if (live.sim - start.sim > 2) {
+        return {
+          state: "fail",
+          code: "not-drawn",
+          reason: `sim +${(live.sim - start.sim).toFixed(3)}s but only ${live.frames - start.frames} new frames`,
+        };
+      }
+      return { state: "pending" };
+    },
   });
+}
+
+async function captureRusherLunge(page, errors) {
   try {
-    await page.addInitScript(() => {
-      window.__fragKeepDrawingBuffer = true;
-    });
-    await page.goto(`${devOrigin}/`, { waitUntil: "load", timeout: 30_000 });
-    await page.waitForSelector("canvas", { timeout: 45_000 });
-    await page.locator("#content-warning-continue").click();
-    await page.locator("#click-to-play").click();
-    await page.waitForFunction(
-      () => document.querySelector("#app-shell")?.getAttribute("data-phase") === "playing",
-      undefined,
-      { timeout: 8_000, polling: 50 },
-    );
+    if ((await page.evaluate(() => document.querySelector("#app-shell")?.getAttribute("data-phase") ?? "")) === "paused") {
+      await page.locator("#pause-resume").click();
+    }
     const sample = () =>
       page.evaluate(() => {
         const canvas = document.querySelector("canvas");
@@ -1348,7 +1364,13 @@ async function captureRusherLunge(browser, errors) {
           const blue = data[i + 2] ?? 0;
           if (red > 170 && blue > 120 && red > green + 12) hot += 1;
         }
-        return { hot, png: probe.toDataURL("image/png") };
+        const sim = canvas.fragSim;
+        return {
+          hot,
+          png: probe.toDataURL("image/png"),
+          sim: typeof sim?.sim === "number" ? sim.sim : Number.NaN,
+          frames: typeof sim?.frames === "number" ? sim.frames : 0,
+        };
       });
     const faced = await page.evaluate(() => {
       const run = window.__fragRun;
@@ -1362,12 +1384,12 @@ async function captureRusherLunge(browser, errors) {
       errors.push(faced.error);
       return;
     }
-    await page.evaluate(
-      () =>
-        new Promise((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
-        }),
-    );
+    const facedFrame = await waitRenderedFrames(page, 1);
+    if (facedFrame.verdict.state !== "pass") {
+      const reason = facedFrame.verdict.state === "fail" ? facedFrame.verdict.reason : "frame sample missing";
+      errors.push(`rusher capture did not draw the spawn view (${reason})`);
+      return;
+    }
     const before = await sample();
     if (before.error) {
       errors.push(`rusher capture before pose: ${before.error}`);
@@ -1381,12 +1403,12 @@ async function captureRusherLunge(browser, errors) {
       errors.push(posed.error);
       return;
     }
-    await page.evaluate(
-      () =>
-        new Promise((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
-        }),
-    );
+    const posedFrame = await waitRenderedFrames(page, 1);
+    if (posedFrame.verdict.state !== "pass") {
+      const reason = posedFrame.verdict.state === "fail" ? posedFrame.verdict.reason : "frame sample missing";
+      errors.push(`rusher capture did not draw the lunge (${reason})`);
+      return;
+    }
     const after = await sample();
     if (after.error) {
       errors.push(`rusher capture after pose: ${after.error}`);
@@ -1401,7 +1423,7 @@ async function captureRusherLunge(browser, errors) {
       if (writePng(after.png, saved)) captures.push(saved);
     }
     console.log(
-      `rusher lunge capture hot ${before.hot}->${after.hot}, files ${captures.join(", ") || "unsaved"}`,
+      `rusher lunge capture hot ${before.hot}->${after.hot} at sim ${before.sim.toFixed(3)}->${after.sim.toFixed(3)} frames ${before.frames}->${after.frames}, files ${captures.join(", ") || "unsaved"}`,
     );
     if (!(after.hot > before.hot + 8)) {
       errors.push(`rusher lunge was not visible (hot ${before.hot}->${after.hot})`);
@@ -1410,8 +1432,6 @@ async function captureRusherLunge(browser, errors) {
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`rusher capture failed: ${message}`);
-  } finally {
-    await page.close();
   }
 }
 
@@ -1443,6 +1463,11 @@ async function runDevSmoke(browser, errors) {
   };
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   if (process.env.FRAG_SLOW_FRAMES === "1") await installSlowFrames(page);
+  // The lunge capture reads this same page. The flag has to be set before the
+  // context exists. The production checkpoint page does not set it.
+  await page.addInitScript(() => {
+    window.__fragKeepDrawingBuffer = true;
+  });
   try {
     noteConsole(page, errors, "dev");
     page.on("request", (request) => {
@@ -1760,7 +1785,7 @@ async function runDevSmoke(browser, errors) {
       }
       await measureWave4(page, errors);
     }
-    await captureRusherLunge(browser, errors);
+    await captureRusherLunge(page, errors);
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     errors.push(`dev smoke failed: ${message}`);
