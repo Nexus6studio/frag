@@ -8,8 +8,13 @@ import {
   bindHud,
   hudMode,
   hudReadout,
+  deathRecapText,
+  paintRecap,
   recapAcceptsInput,
+  recapClickAction,
   recapEnterAction,
+  recapTarget,
+  recapTargetAt,
 } from "../src/hud/model.ts";
 import { START_VITALS, createPlayerState, exposePlayerDebug } from "../src/player/state.ts";
 
@@ -121,6 +126,7 @@ test("hud readout follows player state and shows armor", () => {
   phase = "playing";
   player.set({ hp: 0 });
   assert.equal(els.root.dataset.mode, "dead");
+  assert.equal(els.armorStat.style.visibility, "");
   assert.equal(els.death.hidden, false);
   assert.equal(els.death.inert, false);
   assert.equal(els.death.style.display, "");
@@ -158,6 +164,68 @@ test("turning showArmor on reveals the same slot", () => {
   assert.equal(els.armorStat.attrs["aria-hidden"], undefined);
   assert.equal(els.hp.textContent, "100");
   assert.equal(els.ammo.textContent, "40+40");
+});
+
+test("a death in wave 1 names the wave reached", () => {
+  assert.equal(
+    deathRecapText({ wave: 1, wavesCleared: 0, frags: 0, timeAlive: 0 }),
+    "Reached wave 1\n0 frags\n00:00\nclick to restart",
+  );
+  assert.doesNotMatch(deathRecapText({ wave: 1, wavesCleared: 0, frags: 4, timeAlive: 38 }), /waves 0/);
+});
+
+test("a badge is painted only on the stats that were beaten", () => {
+  const fields = {
+    wave: { textContent: "" },
+    frags: { textContent: "" },
+    time: { textContent: "" },
+    waveBadge: { hidden: true },
+    fragsBadge: { hidden: true },
+    timeBadge: { hidden: true },
+  };
+  const recap = { wave: 4, wavesCleared: 3, frags: 19, timeAlive: 158 };
+  paintRecap(fields, recap, { wave: false, frags: true, time: false });
+  assert.equal(fields.wave.textContent, "Reached wave 4");
+  assert.equal(fields.frags.textContent, "19 frags");
+  assert.equal(fields.time.textContent, "02:38");
+  assert.equal(fields.waveBadge.hidden, true);
+  assert.equal(fields.fragsBadge.hidden, false);
+  assert.equal(fields.timeBadge.hidden, true);
+  paintRecap(fields, recap, { wave: false, frags: false, time: false });
+  assert.equal(fields.fragsBadge.hidden, true, "a tie painted a badge");
+});
+
+test("copy score and its line never restart, and the rest of the card does", () => {
+  assert.equal(recapClickAction({ armed: false, target: "copy", restartable: true }), "swallow");
+  assert.equal(recapClickAction({ armed: false, target: "line", restartable: true }), "swallow");
+  assert.equal(recapClickAction({ armed: false, target: "card", restartable: true }), "swallow");
+  assert.equal(recapClickAction({ armed: true, target: "copy", restartable: true }), "keep");
+  assert.equal(recapClickAction({ armed: true, target: "line", restartable: true }), "keep");
+  assert.equal(recapClickAction({ armed: true, target: "card", restartable: true }), "restart");
+  assert.equal(recapClickAction({ armed: true, target: "card", restartable: false }), "swallow");
+  assert.equal(recapClickAction({ armed: true, target: "copy", restartable: false }), "swallow");
+
+  const dead = { code: "Enter", repeat: false, pauseResume: false, hp: 0, phase: "playing", armed: true };
+  assert.equal(recapEnterAction({ ...dead, target: "copy" }), "keep");
+  assert.equal(recapEnterAction({ ...dead, target: "line" }), "keep");
+  assert.equal(recapEnterAction({ ...dead, target: "card" }), "restart");
+  assert.equal(recapEnterAction({ ...dead, armed: false, target: "copy" }), "swallow");
+
+  const child = {};
+  const copy = { contains: (node) => node === child };
+  const line = { contains: () => false };
+  assert.equal(recapTarget(child, copy, line), "copy");
+  assert.equal(recapTarget(line, copy, line), "line");
+  assert.equal(recapTarget({}, copy, line), "card");
+
+  const canvas = {};
+  assert.equal(
+    recapTargetAt(canvas, 12, 12, () => child, copy, line),
+    "copy",
+    "a locked click on the canvas still copies when the cursor is on the button",
+  );
+  assert.equal(recapTargetAt(canvas, 12, 12, () => ({}), copy, line), "card");
+  assert.equal(recapTargetAt(child, 0, 0, () => ({}), copy, line), "copy");
 });
 
 test("the recap ignores input for one second", () => {

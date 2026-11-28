@@ -1030,7 +1030,7 @@ async function assertShellFlow(page, errors) {
       errors.push(`crosshair contrast is ${readout.tickBackground} / ${readout.tickShadow}`);
     }
     const deathCopy = (readout.deathText ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-    if (!readout.deathHidden || !deathCopy.includes("click to restart") || !deathCopy.includes("waves")) {
+    if (!readout.deathHidden || !deathCopy.includes("click to restart") || !deathCopy.includes("reached wave")) {
       errors.push(`death recap is ${readout.deathHidden ? "hidden" : "shown"}: ${readout.deathText}`);
     }
     if (readout.cursor !== "none") errors.push(`play cursor is ${readout.cursor}`);
@@ -1245,8 +1245,15 @@ async function assertShellFlow(page, errors) {
     }
   }
 
-  const stored = await page.evaluate(() => Object.keys(localStorage));
-  if (stored.length > 0) errors.push(`localStorage was written: ${stored.join(", ")}`);
+  const stored = await page.evaluate(() => ({
+    keys: Object.keys(localStorage),
+    dead: document.querySelector("#hud")?.getAttribute("data-mode") === "dead",
+  }));
+  const unexpected = stored.keys.filter((key) => !(stored.dead && key === "frag:scores:v1"));
+  if (unexpected.length > 0) errors.push(`localStorage was written: ${unexpected.join(", ")}`);
+  if (stored.dead && !stored.keys.includes("frag:scores:v1")) {
+    errors.push("death did not store local scores");
+  }
 
   await page.reload({ waitUntil: "load", timeout: 15_000 });
   await page.waitForSelector("canvas", { timeout: 5_000 });
@@ -1541,6 +1548,7 @@ async function runDevSmoke(browser, errors) {
     }
 
     const raced = await page.evaluate(() => {
+      const beforeStore = Object.keys(localStorage);
       window.__fragDamage(500);
       const death = document.querySelector("#death-recap");
       const before = death?.textContent ?? "";
@@ -1562,8 +1570,16 @@ async function runDevSmoke(browser, errors) {
         warningHidden: document.querySelector("#content-warning")?.hidden ?? false,
         pauseHidden: pause instanceof HTMLElement ? pause.hidden : null,
         deathHidden: death instanceof HTMLElement ? death.hidden : null,
+        beforeStore,
+        stored: Object.keys(localStorage),
       };
     });
+    if (raced.beforeStore.length > 0) {
+      errors.push(`localStorage written before the first death: ${raced.beforeStore.join(", ")}`);
+    }
+    if (raced.stored.length !== 1 || raced.stored[0] !== "frag:scores:v1") {
+      errors.push(`first death did not store scores: ${raced.stored.join(", ")}`);
+    }
     if (!raced.shown) errors.push("death recap was hidden before the lock loss");
     if (raced.hp !== "0") errors.push(`death lock loss restarted (hp ${raced.hp})`);
     if (raced.phase !== "playing" || raced.pauseHidden !== true) {
@@ -1691,8 +1707,9 @@ async function runDevSmoke(browser, errors) {
       };
     });
     if (recap.hidden) errors.push("dev death recap stayed hidden");
-    if (!/waves\s+\d+/.test(recap.text)) errors.push(`dev recap missing waves: ${recap.text}`);
-    if (!/frags\s+\d+/.test(recap.text)) errors.push(`dev recap missing frags: ${recap.text}`);
+    if (!/reached wave\s+[1-9]\d*/.test(recap.text)) errors.push(`dev recap missing reached wave: ${recap.text}`);
+    if (/waves\s+0\b/.test(recap.text)) errors.push(`dev recap still says waves 0: ${recap.text}`);
+    if (!/\d+\s+frags/.test(recap.text)) errors.push(`dev recap missing frags: ${recap.text}`);
     if (!/\d{2}:\d{2}/.test(recap.text)) errors.push(`dev recap missing time: ${recap.text}`);
     if (!recap.text.includes("click to restart")) errors.push(`dev recap missing restart hint: ${recap.text}`);
     if (recap.bar !== "hidden") errors.push(`dev combat hud stayed visible (${recap.bar})`);
@@ -1710,6 +1727,40 @@ async function runDevSmoke(browser, errors) {
     const earlyRestart = await page.evaluate(() => document.querySelector("#hud-hp")?.textContent ?? "");
     if (earlyRestart !== "0") errors.push(`enter during the recap lockout restarted (hp ${earlyRestart})`);
     await new Promise((resolve) => setTimeout(resolve, 1100));
+    await page.locator("#copy-score").click({ force: true });
+    try {
+      await page.waitForFunction(
+        () => {
+          const label = (document.querySelector("#copy-score")?.textContent ?? "").trim().toLowerCase();
+          const line = document.querySelector("#copy-score-line");
+          const shown =
+            line instanceof HTMLInputElement && line.hidden === false && line.value.startsWith("FRAG");
+          return label === "copied" || shown;
+        },
+        undefined,
+        { timeout: 2_000, polling: 50 },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      errors.push(`copy score did not settle: ${message}`);
+    }
+    const copied = await page.evaluate(() => {
+      const line = document.querySelector("#copy-score-line");
+      return {
+        hp: document.querySelector("#hud-hp")?.textContent ?? "",
+        label: (document.querySelector("#copy-score")?.textContent ?? "").trim(),
+        lineHidden: line instanceof HTMLElement ? line.hidden : true,
+        lineValue: line instanceof HTMLInputElement ? line.value : "",
+      };
+    });
+    if (copied.hp !== "0") errors.push(`copy score restarted (hp ${copied.hp})`);
+    const confirmed =
+      copied.label.toLowerCase() === "copied" || (!copied.lineHidden && copied.lineValue.startsWith("FRAG"));
+    if (!confirmed) errors.push(`copy score did not confirm (${JSON.stringify(copied)})`);
+    await page.evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+    });
     await page.keyboard.press("Enter");
     const restarted = await page.evaluate(() => {
       const warning = document.querySelector("#content-warning");
@@ -1753,8 +1804,8 @@ async function runDevSmoke(browser, errors) {
     if (restarted.frags !== 0 || restarted.wavesCleared !== 0) {
       errors.push(`dev restart counters frags ${restarted.frags} waves ${restarted.wavesCleared}`);
     }
-    if (restarted.stored.length > 0) {
-      errors.push(`dev localStorage was written: ${restarted.stored.join(", ")}`);
+    if (restarted.stored.length !== 1 || restarted.stored[0] !== "frag:scores:v1") {
+      errors.push(`dev local scores missing: ${restarted.stored.join(", ")}`);
     }
     if (!(Math.abs(restarted.yaw ?? 99) < 1) || !(Math.abs(restarted.pitch ?? 99) < 1)) {
       errors.push(`restart kept the old facing yaw ${restarted.yaw} pitch ${restarted.pitch}`);
@@ -2859,7 +2910,7 @@ try {
       process.exitCode = 1;
     } else {
       console.log(
-        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / 0 armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> M mutes -> damage arcs -> pause -> resume -> reload, readable type at 480p, 720p, 1280x800, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, hitmarker mounted, no console warnings, no ReadPixels stall, no third-party requests, localStorage empty`,
+        `smoke passed: canvas ${sample.width}x${sample.height}, ${sample.colored} non-background samples, draw calls ${stats.calls}, triangles ${stats.triangles}, lines ${stats.lines}, points ${stats.points}, 105° horizontal fov, warning -> continue -> click-to-play -> hud 100 / 0 armor / 40+40 -> W moves forward -> fire drops ammo -> R reloads -> M mutes -> damage arcs -> pause -> resume -> reload, readable type at 480p, 720p, 1280x800, and 1080p, death recap -> click restart -> 100/0/40+40 wave 1, hitmarker mounted, no console warnings, no ReadPixels stall, no third-party requests, local scores only`,
       );
     }
   } finally {

@@ -282,10 +282,11 @@ test("death recap matches a scripted fight and further hits do nothing", () => {
   player.set({ hp: fatal.hp, armor: fatal.armor });
   const recap = sim.recap();
   assert.equal(player.get().hp, 0);
+  assert.equal(recap.wave, 2);
   assert.equal(recap.wavesCleared, 1);
   assert.equal(recap.frags, 3);
   assert.ok(recap.timeAlive >= 4 && recap.timeAlive < 5, `time ${recap.timeAlive}`);
-  assert.equal(deathRecapText(recap), `waves 1\nfrags 3\n${formatClock(recap.timeAlive)}\nclick to restart`);
+  assert.equal(deathRecapText(recap), `Reached wave 2\n3 frags\n${formatClock(recap.timeAlive)}\nclick to restart`);
   assert.equal(formatClock(recap.timeAlive), "00:04");
 
   const frozen = recap.timeAlive;

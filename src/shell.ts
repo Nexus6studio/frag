@@ -281,9 +281,13 @@ export function mountShell(
     },
     holdLock(): void {
       if (phase === "warning" || phase === "ready") return;
+      // A death already released the lock so the recap can be clicked. Do not
+      // grab it again from this click: the next canvas press asks, the same
+      // way a rejected lock does. If the pointer is still held, this click
+      // may drop it, and that drop is not a pause.
       restartHold = document.pointerLockElement === canvas;
       setPhase("playing");
-      requestLock();
+      if (restartHold) requestLock();
     },
     onFrame(time: number, pose?: DebugPose): void {
       if (lastTime !== 0) {

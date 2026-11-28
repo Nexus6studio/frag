@@ -2,7 +2,8 @@ import "./hud.css";
 import { ARC_CAP, seatArcPeak, type FeedbackSample, type ScreenRect } from "../feel.ts";
 import type { PlayerStore } from "../player/state";
 import type { DeathRecap } from "../waves.ts";
-import { acceptRestartClick, bindHud, deathRecapText, recapAcceptsInput, recapEnterAction, type HudElements } from "./model";
+import { acceptRestartClick, bindHud, recapAcceptsInput, recapClickAction, recapEnterAction, recapTargetAt, type HudElements } from "./model";
+import { COPY_LABEL, COPIED_LABEL, applyCopyFeedback, createScoreBook, readClipboard, scoreFromRecap, scoreLine, writeScoreLine } from "../scores.ts";
 import { isPauseResume } from "../shell";
 
 export function mountHud(
@@ -62,12 +63,28 @@ export function mountHud(
   waveEl.id = "hud-wave";
   waveEl.textContent = "WAVE 1";
 
-  const death = document.createElement("button");
-  death.type = "button";
+  const death = document.createElement("div");
   death.id = "death-recap";
-  death.tabIndex = -1;
   death.hidden = true;
-  death.textContent = deathRecapText({ wavesCleared: 0, frags: 0, timeAlive: 0 });
+  const waveStat = recapStat("recap-wave");
+  const fragsStat = recapStat("recap-frags");
+  const timeStat = recapStat("recap-time");
+  const hint = document.createElement("p");
+  hint.className = "recap-hint";
+  hint.textContent = "click to restart";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.id = "copy-score";
+  copy.textContent = COPY_LABEL;
+  const fallback = document.createElement("input");
+  fallback.id = "copy-score-line";
+  fallback.type = "text";
+  fallback.readOnly = true;
+  fallback.hidden = true;
+  fallback.spellcheck = false;
+  fallback.autocomplete = "off";
+  fallback.setAttribute("aria-label", "Score");
+  death.append(waveStat.row, fragsStat.row, timeStat.row, hint, copy, fallback);
 
   const mute = document.createElement("p");
   mute.id = "hud-mute";
@@ -84,6 +101,14 @@ export function mountHud(
     armorStat: armorStat.root,
     death,
     cue,
+    recap: {
+      wave: waveStat.value,
+      frags: fragsStat.value,
+      time: timeStat.value,
+      waveBadge: waveStat.badge,
+      fragsBadge: fragsStat.badge,
+      timeBadge: timeStat.badge,
+    },
   };
 
   const shell = document.querySelector<HTMLElement>("#app-shell");
@@ -95,8 +120,10 @@ export function mountHud(
     else delete document.documentElement.dataset.cursor;
   };
 
+  const scores = createScoreBook();
   const bound = bindHud(player, els, () => shell?.getAttribute("data-phase") ?? null, syncCursor, {
     getRecap: hooks?.getRecap,
+    onDeath: (recap) => scores.record(scoreFromRecap(recap)).fresh,
   });
 
   const observer = new MutationObserver(() => {
@@ -117,15 +144,24 @@ export function mountHud(
   let deathAt = 0;
   let heldThroughDeath = false;
   let pointerDown = false;
+  let copyTicket = 0;
   player.subscribe(() => {
     const dead = player.get().hp <= 0;
     if (dead && deathAt === 0) {
       deathAt = performance.now();
       heldThroughDeath = pointerDown;
+      // Pointer lock retargets every click at the canvas and reports 0,0, so
+      // the cursor cannot land on Copy score. Release it. A dead player does
+      // not pause on that release. Restart asks for the lock again.
+      if (document.pointerLockElement) document.exitPointerLock();
     }
     if (!dead) {
       deathAt = 0;
       heldThroughDeath = false;
+      copyTicket += 1;
+      copy.textContent = COPY_LABEL;
+      fallback.hidden = true;
+      fallback.value = "";
     }
   });
 
@@ -157,15 +193,86 @@ export function mountHud(
       pointerDown = false;
     },
   );
+  const copyReady = (): boolean => armed() && !heldThroughDeath;
+
+  const confirmCopy = (): void => {
+    if (!copyReady() || player.get().hp > 0) return;
+    const recap = hooks?.getRecap?.();
+    if (!recap) return;
+    const line = scoreLine(scoreFromRecap(recap));
+    const ticket = ++copyTicket;
+    void writeScoreLine(line, readClipboard(navigator)).then(
+      (result) => {
+        if (ticket !== copyTicket || player.get().hp > 0) return;
+        applyCopyFeedback({ button: copy, line: fallback }, result, line);
+        if (result === "copied") {
+          window.setTimeout(() => {
+            if (ticket !== copyTicket) return;
+            if (copy.textContent === COPIED_LABEL) copy.textContent = COPY_LABEL;
+          }, 2000);
+          return;
+        }
+        try {
+          fallback.focus();
+          fallback.select();
+        } catch {
+          // The line is already in the field.
+        }
+      },
+      () => {
+        if (ticket !== copyTicket || player.get().hp > 0) return;
+        applyCopyFeedback({ button: copy, line: fallback }, "fallback", line);
+        try {
+          fallback.focus();
+          fallback.select();
+        } catch {
+          // The line is already in the field.
+        }
+      },
+    );
+  };
+
+  copy.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    confirmCopy();
+  });
+
+  const targetOf = (event: MouseEvent | KeyboardEvent): ReturnType<typeof recapTargetAt> =>
+    recapTargetAt(
+      event.target,
+      "clientX" in event ? event.clientX : Number.NaN,
+      "clientY" in event ? event.clientY : Number.NaN,
+      (x, y) => document.elementFromPoint(x, y),
+      copy,
+      fallback,
+    );
+
   window.addEventListener(
     "click",
     (event) => {
-      if (root.dataset.mode === "dead" && (!armed() || heldThroughDeath)) {
+      if (root.dataset.mode !== "dead") return;
+      const action = recapClickAction({
+        armed: copyReady(),
+        target: targetOf(event),
+        restartable: acceptRestartClick({
+          mode: root.dataset.mode ?? null,
+          phase: shell?.getAttribute("data-phase") ?? null,
+          hidden: document.hidden || blurred,
+        }),
+      });
+      if (action === "keep") {
         event.preventDefault();
         event.stopPropagation();
+        confirmCopy();
         return;
       }
-      restartFromRecap(event);
+      if (action === "restart") {
+        restartFromRecap(event);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
     },
     true,
   );
@@ -179,8 +286,9 @@ export function mountHud(
         hp: player.get().hp,
         phase: shell?.getAttribute("data-phase") ?? null,
         armed: armed(),
+        target: targetOf(event),
       });
-      if (action === "ignore") return;
+      if (action === "ignore" || action === "keep") return;
       if (action === "swallow") {
         event.preventDefault();
         event.stopPropagation();
@@ -245,6 +353,23 @@ function hudEdgeObstacles(elements: readonly HTMLElement[]): ScreenRect[] {
     });
   }
   return rects;
+}
+
+function recapStat(id: string): {
+  row: HTMLParagraphElement;
+  value: HTMLSpanElement;
+  badge: HTMLSpanElement;
+} {
+  const row = document.createElement("p");
+  row.className = "recap-stat";
+  const value = document.createElement("span");
+  value.id = id;
+  const badge = document.createElement("span");
+  badge.className = "recap-badge";
+  badge.hidden = true;
+  badge.textContent = "NEW BEST";
+  row.append(value, badge);
+  return { row, value, badge };
 }
 
 function stat(

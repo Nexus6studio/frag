@@ -1,5 +1,6 @@
 import type { PlayerStore, PlayerVitals } from "../player/state";
-import { formatClock, type DeathRecap } from "../waves.ts";
+import { NO_NEW_BESTS, type NewBestFlags } from "../scores.ts";
+import { formatClock, reachedWave, type DeathRecap } from "../waves.ts";
 
 export type { DeathRecap };
 
@@ -16,6 +17,15 @@ export type HudReadout = {
   mode: HudMode;
 };
 
+export type RecapFields = {
+  wave: HTMLElement;
+  frags: HTMLElement;
+  time: HTMLElement;
+  waveBadge: HTMLElement;
+  fragsBadge: HTMLElement;
+  timeBadge: HTMLElement;
+};
+
 export type HudElements = {
   root: HTMLElement;
   hp: HTMLElement;
@@ -24,7 +34,13 @@ export type HudElements = {
   armorStat: HTMLElement;
   death: HTMLElement;
   cue?: HTMLElement;
+  recap?: RecapFields;
 };
+
+export type { NewBestFlags };
+
+/** Where a recap click landed. The card restarts. Copy and its line do not. */
+export type RecapTarget = "card" | "copy" | "line";
 
 /** The recap ignores input for this long so a held shot cannot skip it. */
 export const RECAP_ARM_SECONDS = 1;
@@ -36,9 +52,11 @@ export function recapAcceptsInput(elapsedSeconds: number): boolean {
 /**
  * What Enter should do to the recap.
  * `ignore` leaves the key alone. `swallow` is the lockout: the player is dead,
- * the recap is up, and the press must not restart. `restart` is a real confirm.
- * A pause resume is `ignore` even when HP is already 0. Esc and the killing
- * blow can land in one turn, and that Enter is the pause overlay, not the recap.
+ * the recap is up, and the press must not restart. `keep` is Copy score or its
+ * line: the press stays on that control and does not restart. `restart` is a
+ * real confirm on the rest of the card. A pause resume is `ignore` even when
+ * HP is already 0. Esc and the killing blow can land in one turn, and that
+ * Enter is the pause overlay, not the recap.
  */
 export function recapEnterAction(input: {
   code: string;
@@ -47,14 +65,70 @@ export function recapEnterAction(input: {
   hp: number;
   phase: string | null;
   armed: boolean;
-}): "ignore" | "swallow" | "restart" {
+  target?: RecapTarget;
+}): "ignore" | "swallow" | "keep" | "restart" {
   if (input.code !== "Enter" || input.repeat) return "ignore";
   if (input.pauseResume) return "ignore";
   if (!(input.hp <= 0)) return "ignore";
   // Paused, or still on the way there: the shell owns this Enter.
   if (input.phase !== "playing") return "ignore";
   if (!input.armed) return "swallow";
+  const target = input.target ?? "card";
+  if (target === "copy" || target === "line") return "keep";
   return "restart";
+}
+
+export function recapClickAction(input: {
+  armed: boolean;
+  target: RecapTarget;
+  restartable: boolean;
+}): "swallow" | "keep" | "restart" {
+  if (!input.armed || !input.restartable) return "swallow";
+  if (input.target === "copy" || input.target === "line") return "keep";
+  return "restart";
+}
+
+export function recapTarget(
+  target: EventTarget | null,
+  copy: { contains(node: Node): boolean } | null,
+  line: { contains(node: Node): boolean } | null,
+): RecapTarget {
+  if (inside(target, copy)) return "copy";
+  if (inside(target, line)) return "line";
+  return "card";
+}
+
+/**
+ * Pointer lock retargets the event at the canvas. The coordinates still name
+ * the control under the cursor, so a locked click can copy without restarting.
+ */
+export function recapTargetAt(
+  target: EventTarget | null,
+  x: number,
+  y: number,
+  hit: ((x: number, y: number) => EventTarget | null) | null,
+  copy: { contains(node: Node): boolean } | null,
+  line: { contains(node: Node): boolean } | null,
+): RecapTarget {
+  const direct = recapTarget(target, copy, line);
+  if (direct !== "card" || !hit) return direct;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return direct;
+  try {
+    const placed = recapTarget(hit(x, y), copy, line);
+    return placed;
+  } catch {
+    return direct;
+  }
+}
+
+function inside(target: EventTarget | null, control: { contains(node: Node): boolean } | null): boolean {
+  if (!target || !control) return false;
+  if (target === (control as unknown as EventTarget)) return true;
+  try {
+    return control.contains(target as Node);
+  } catch {
+    return false;
+  }
 }
 
 /** A death click restarts only from the live recap. Pause and a blur do not. */
@@ -86,17 +160,43 @@ export function hudReadout(state: PlayerVitals, phase: string | null): HudReadou
   };
 }
 
-export function deathRecapText(recap: DeathRecap): string {
-  return `waves ${recap.wavesCleared}\nfrags ${recap.frags}\n${formatClock(recap.timeAlive)}\nclick to restart`;
+export function waveLabel(wave: number): string {
+  return `Reached wave ${reachedWave(wave)}`;
 }
 
-export function applyHud(els: HudElements, view: HudReadout, recap?: DeathRecap | null): void {
+export function fragsLabel(frags: number): string {
+  const n = Math.floor(frags);
+  const shown = Number.isFinite(n) && n >= 0 ? n : 0;
+  return `${shown} frags`;
+}
+
+export function deathRecapText(recap: DeathRecap): string {
+  return `${waveLabel(recap.wave)}\n${fragsLabel(recap.frags)}\n${formatClock(recap.timeAlive)}\nclick to restart`;
+}
+
+export function paintRecap(fields: RecapFields, recap: DeathRecap, fresh: NewBestFlags = NO_NEW_BESTS): void {
+  fields.wave.textContent = waveLabel(recap.wave);
+  fields.frags.textContent = fragsLabel(recap.frags);
+  fields.time.textContent = formatClock(recap.timeAlive);
+  fields.waveBadge.hidden = !fresh.wave;
+  fields.fragsBadge.hidden = !fresh.frags;
+  fields.timeBadge.hidden = !fresh.time;
+}
+
+export function applyHud(
+  els: HudElements,
+  view: HudReadout,
+  recap?: DeathRecap | null,
+  fresh?: NewBestFlags | null,
+): void {
   els.root.dataset.mode = view.mode;
   els.hp.textContent = view.hp;
   els.armor.textContent = view.armor;
   els.ammo.textContent = view.ammo;
   els.armorStat.dataset.visible = view.showArmor ? "true" : "false";
-  els.armorStat.style.visibility = view.showArmor ? "visible" : "hidden";
+  // An inline visible value paints through a visibility:hidden parent, so the
+  // death recap would keep the armor chip. Drop it and let the hidden bar win.
+  els.armorStat.style.visibility = !view.showArmor ? "hidden" : view.mode === "dead" ? "" : "visible";
   if (view.showArmor) els.armorStat.removeAttribute("aria-hidden");
   else els.armorStat.setAttribute("aria-hidden", "true");
   // Playing used to leave this full-viewport button in the hit-test tree:
@@ -109,7 +209,8 @@ export function applyHud(els: HudElements, view: HudReadout, recap?: DeathRecap 
   els.death.style.pointerEvents = dead ? "auto" : "none";
   if (dead) els.death.removeAttribute("aria-hidden");
   else els.death.setAttribute("aria-hidden", "true");
-  if (recap) els.death.textContent = deathRecapText(recap);
+  if (recap && els.recap) paintRecap(els.recap, recap, fresh ?? NO_NEW_BESTS);
+  else if (recap) els.death.textContent = deathRecapText(recap);
   if (els.cue) {
     const empty = view.ammo === "0+0";
     const reloading = !empty && view.ammo.startsWith("0+");
@@ -123,10 +224,22 @@ export function bindHud(
   els: HudElements,
   getPhase: () => string | null,
   onRender?: () => void,
-  hooks?: { getRecap?: () => DeathRecap },
+  hooks?: { getRecap?: () => DeathRecap; onDeath?: (recap: DeathRecap) => NewBestFlags },
 ): { update(): void; destroy(): void } {
+  let deadNoted = false;
+  let fresh: NewBestFlags = NO_NEW_BESTS;
   const update = (): void => {
-    applyHud(els, hudReadout(player.get(), getPhase()), hooks?.getRecap?.() ?? null);
+    const hp = player.get().hp;
+    if (hp > 0) {
+      deadNoted = false;
+      fresh = NO_NEW_BESTS;
+    } else if (!deadNoted) {
+      deadNoted = true;
+      const died = hooks?.getRecap?.();
+      if (died && hooks?.onDeath) fresh = hooks.onDeath(died);
+    }
+    const show = hp <= 0 ? fresh : NO_NEW_BESTS;
+    applyHud(els, hudReadout(player.get(), getPhase()), hooks?.getRecap?.() ?? null, show);
     onRender?.();
   };
   const unsubscribe = player.subscribe(update);
