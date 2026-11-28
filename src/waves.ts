@@ -26,9 +26,17 @@ export interface WavePlan {
 }
 
 export interface DeathRecap {
+  /** Wave the HUD was showing. Waves cleared is one behind on the opening wave. */
+  wave: number;
   wavesCleared: number;
   frags: number;
   timeAlive: number;
+}
+
+/** The wave number on the HUD. A missing or empty value is wave 1. */
+export function reachedWave(wave: number): number {
+  const n = Math.floor(wave);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
 }
 
 export function waveComposition(wave: number): WavePlan {
@@ -157,7 +165,7 @@ export function createWaveDirector(options?: { enforcersEnabled?: boolean }): Wa
       enforcers = waveSpawnCounts(1, enforcersEnabled).enforcers;
     },
     recap(): DeathRecap {
-      return { wavesCleared, frags, timeAlive };
+      return { wave, wavesCleared, frags, timeAlive };
     },
   };
 }
